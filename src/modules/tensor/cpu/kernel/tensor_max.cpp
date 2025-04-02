@@ -756,6 +756,7 @@ RppStatus tensor_max_f16_f16_host(Rpp16f *srcPtr,
 			maxArr[maxArrIndex + 1] = (Rpp16f)maxG;
 			maxArr[maxArrIndex + 2] = (Rpp16f)maxB;
 			maxArr[maxArrIndex + 3] = (Rpp16f)maxC;
+        }
     }
     return RPP_SUCCESS;
 }
