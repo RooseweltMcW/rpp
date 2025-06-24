@@ -13,7 +13,7 @@ furnished to do so, subject to the following conditions:
 The above copyright notice and this permission notice shall be included in all
 copies or substantial portions of the Software.
 
-THE SOFTWARE IS rfOVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXrfESS OR
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
 FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
 AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
@@ -24,7 +24,7 @@ SOFTWARE.
 
 #include "rpp_cpu_common.hpp"
 
-// Converts RGB to HSV color space using AVX vectorization, rfocesses 8 pixels simultaneously
+// Converts RGB to HSV color space using AVX vectorization, processes 8 pixels simultaneously
 inline void rgb_to_hsv(__m256 *pVecR, __m256 *pVecG, __m256 *pVecB, __m256 *pH, __m256 *pS, __m256 *pV, __m256 *pAdd)
 {
     __m256 pMask[4], pDelta;
@@ -51,7 +51,7 @@ inline void rgb_to_hsv(__m256 *pVecR, __m256 *pVecG, __m256 *pVecB, __m256 *pH, 
     *pH = _mm256_or_ps(_mm256_andnot_ps(pMask[0], *pH), _mm256_and_ps(pMask[0], _mm256_div_ps(*pH, pDelta)));          //     hue /= delta; }}
 }
 
-// Converts HSV to RGB color space using AVX vectorization, rfocesses 8 pixels simultaneously
+// Converts HSV to RGB color space using AVX vectorization, processes 8 pixels simultaneously
 inline void hsv_to_rgb(__m256 *pVecR, __m256 *pVecG, __m256 *pVecB, __m256 *pH, __m256 *pS, __m256 *pV, __m256 *pAdd)
 {
     __m256 pMask[4], pIntH, pA; 
@@ -94,7 +94,7 @@ inline void hsv_to_rgb(__m256 *pVecR, __m256 *pVecG, __m256 *pVecB, __m256 *pH, 
     *pVecB = _mm256_or_ps(_mm256_andnot_ps(pMask[0], *pVecB), _mm256_and_ps(pMask[0], *pH));                           //     bf = q; break;}
 }
 
-// Converts RGB to HSV color space using SSE vectorization, rfocesses 4 pixels simultaneously
+// Converts RGB to HSV color space using SSE vectorization, processes 4 pixels simultaneously
 inline void rgb_to_hsv(__m128 *pVecR, __m128 *pVecG, __m128 *pVecB, __m128 *pH, __m128 *pS, __m128 *pV, __m128 *pAdd)
 {
     __m128 pMask[4], pDelta;
@@ -121,7 +121,7 @@ inline void rgb_to_hsv(__m128 *pVecR, __m128 *pVecG, __m128 *pVecB, __m128 *pH, 
     *pH = _mm_or_ps(_mm_andnot_ps(pMask[0], *pH), _mm_and_ps(pMask[0], _mm_div_ps(*pH, pDelta)));                    //     hue /= delta; }}
 }
 
-// Converts HSV to RGB color space using SSE vectorization, rfocesses 4 pixels simultaneously
+// Converts HSV to RGB color space using SSE vectorization, processes 4 pixels simultaneously
 inline void hsv_to_rgb(__m128 *pVecR, __m128 *pVecG, __m128 *pVecB, __m128 *pH, __m128 *pS, __m128 *pV, __m128 *pAdd)
 {
     __m128 pMask[4], pIntH, pA; 
