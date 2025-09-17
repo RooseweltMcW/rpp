@@ -138,12 +138,12 @@ int main(int argc, char **argv)
     }
 
     // compute maximum possible buffer size of resample
-    Rpp64u resampleMaxBufferSize = dstDescPtr->n * dstDescPtr->strides.nStride * 1.16;
+    Rpp64u resampleMaxBufferSize = dstDescPtr->n * dstDescPtr->strides.nStride * RESAMPLE_BUFFER_SCALE_FACTOR;
     if (testCase == RESAMPLE)
         oBufferSize = resampleMaxBufferSize;
 
     // compute maximum possible buffer size of spectrogram
-    Rpp64u spectrogramMaxBufferSize = 257 * 3170 * dstDescPtr->n;
+    Rpp64u spectrogramMaxBufferSize = AUDIO_MAX_HEIGHT * SPECTROGRAM_MAX_WIDTH * dstDescPtr->n;
     if (testCase == SPECTROGRAM)
         oBufferSize = spectrogramMaxBufferSize;
 
