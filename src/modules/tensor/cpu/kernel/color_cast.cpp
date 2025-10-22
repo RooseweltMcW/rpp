@@ -663,9 +663,7 @@ RppStatus color_cast_f16_f16_host_tensor(Rpp16f *srcPtr,
                     Rpp32f srcPtrTemp_ps[12], dstPtrTemp_ps[12];
 
                     for(int cnt = 0; cnt < 12; cnt++)
-                    {
                         *(srcPtrTemp_ps + cnt) = (Rpp32f) *(srcPtrTemp + cnt);
-                    }
 
                     __m128 p[4];
 
@@ -753,9 +751,7 @@ RppStatus color_cast_f16_f16_host_tensor(Rpp16f *srcPtr,
                     rpp_simd_store(rpp_store12_f32pln3_to_f32pkd3, dstPtrTemp_ps, p);    // simd stores
 
                     for(int cnt = 0; cnt < 12; cnt++)
-                    {
                         *(dstPtrTemp + cnt) = (Rpp16f) *(dstPtrTemp_ps + cnt);
-                    }
 #endif
                     srcPtrTempR += vectorIncrementPerChannel;
                     srcPtrTempG += vectorIncrementPerChannel;
@@ -809,9 +805,7 @@ RppStatus color_cast_f16_f16_host_tensor(Rpp16f *srcPtr,
                     Rpp32f srcPtrTemp_ps[12], dstPtrTemp_ps[13];
 
                     for(int cnt = 0; cnt < 12; cnt++)
-                    {
                         *(srcPtrTemp_ps + cnt) = (Rpp32f) *(srcPtrTemp + cnt);
-                    }
 
                     __m128 p[4];
 
@@ -822,9 +816,7 @@ RppStatus color_cast_f16_f16_host_tensor(Rpp16f *srcPtr,
                     rpp_simd_store(rpp_store12_f32pln3_to_f32pkd3, dstPtrTemp_ps, p);    // simd stores
 
                     for(int cnt = 0; cnt < 12; cnt++)
-                    {
                         *(dstPtrTemp + cnt) = (Rpp16f) *(dstPtrTemp_ps + cnt);
-                    }
 #endif
                     srcPtrTemp += vectorIncrement;
                     dstPtrTemp += vectorIncrement;

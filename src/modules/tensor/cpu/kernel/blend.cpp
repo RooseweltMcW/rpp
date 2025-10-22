@@ -533,6 +533,7 @@ RppStatus blend_f16_f16_host_tensor(Rpp16f *srcPtr1,
 
         __m256 pMul;
         pMul = _mm256_set1_ps(alpha);
+
 #else
         Rpp32u alignedLength = (bufferLength / 12) * 12;
         Rpp32u vectorIncrement = 12;
