@@ -652,7 +652,7 @@ RppStatus color_cast_f16_f16_host_tensor(Rpp16f *srcPtr,
                 for (; vectorLoopCount < alignedLength; vectorLoopCount += vectorIncrement)
                 {
 #if __AVX2__
-                     __m256 p[4];
+                    __m256 p[4];
 
                     rpp_simd_load(rpp_load24_f16pkd3_to_f32pln3_avx, srcPtrTemp, p);    // simd loads
                     compute_color_cast_24_host(p, pMul, pAdd);    // color_cast adjustment
@@ -727,7 +727,7 @@ RppStatus color_cast_f16_f16_host_tensor(Rpp16f *srcPtr,
                 for (; vectorLoopCount < alignedLength; vectorLoopCount += vectorIncrementPerChannel)
                 {
 #if __AVX2__
-                    __m256 p[1];
+                    __m256 p[4];
 
                     rpp_simd_load(rpp_load24_f16pln3_to_f32pln3_avx, srcPtrTempR, srcPtrTempG, srcPtrTempB, p);    // simd loads
                     compute_color_cast_24_host(p, pMul, pAdd);    // color_cast adjustment
