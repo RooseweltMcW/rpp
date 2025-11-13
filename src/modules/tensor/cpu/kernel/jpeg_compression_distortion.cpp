@@ -2127,7 +2127,7 @@ RppStatus jpeg_compression_distortion_i8_i8_host_tensor(Rpp8s *srcPtr,
                         Rpp8s *dstPtrTempRow;
                         dstPtrTempRow= dstPtrTemp+ row * dstDescPtr->strides.hStride;
                         if((row + i) < roi.xywhROI.roiHeight)
-                            rpp_simd_store(rpp_store48_f32pln3_to_i8pkd3_avx, dstPtrTempRow, &pRgb[row * 6]);                                 // simd loads
+                            rpp_simd_store(rpp_store48_f32pln3_to_i8pkd3_avx<AllowRangeConversion>, dstPtrTempRow, &pRgb[row * 6]);                                 // simd loads
                     }
                     dstPtrTemp += 48;
                     srcPtrTemp += 48;
@@ -2257,7 +2257,7 @@ RppStatus jpeg_compression_distortion_i8_i8_host_tensor(Rpp8s *srcPtr,
                         Rpp8s *dstPtrTempRow;
                         dstPtrTempRow= dstPtrTemp+ row * dstDescPtr->strides.hStride;
                         if((row + i) < roi.xywhROI.roiHeight)
-                            rpp_simd_store(rpp_store48_f32pln3_to_i8pkd3_avx, dstPtrTempRow, &pRgb[row * 6]);                                 // simd loads
+                            rpp_simd_store(rpp_store48_f32pln3_to_i8pkd3_avx<AllowRangeConversion>, dstPtrTempRow, &pRgb[row * 6]);                                 // simd loads
                     }
                     dstPtrTemp += 48;
                     srcPtrTempR += vectorIncrementPerChannel;

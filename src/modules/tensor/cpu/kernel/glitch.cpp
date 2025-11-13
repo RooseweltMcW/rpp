@@ -612,7 +612,7 @@ RppStatus glitch_i8_i8_host_tensor(Rpp8s *srcPtr,
                     Rpp32u gLoc = srcDescPtr->strides.cStride + glitchSrcLocArray[1];
                     Rpp32u bLoc = 2 * srcDescPtr->strides.cStride + glitchSrcLocArray[2];
                     rpp_simd_load(rpp_load48_i8pln3_to_f32pln3_avx, srcPtrChannel + rLoc, srcPtrChannel + gLoc, srcPtrChannel + bLoc, p);
-                    rpp_simd_store(rpp_store48_f32pln3_to_i8pkd3_avx, dstPtrTemp, p);    // simd stores
+                    rpp_simd_store(rpp_store48_f32pln3_to_i8pkd3_avx<AllowRangeConversion>, dstPtrTemp, p);    // simd stores
                     dstPtrTemp += vectorIncrementPkd;
                 }
 #endif

@@ -950,7 +950,7 @@ RppStatus non_linear_blend_i8_i8_host_tensor(Rpp8s *srcPtr1,
                     rpp_simd_load(rpp_load48_i8pln3_to_f32pln3_avx, srcPtr1TempR, srcPtr1TempG, srcPtr1TempB, p1);  // simd loads
                     rpp_simd_load(rpp_load48_i8pln3_to_f32pln3_avx, srcPtr2TempR, srcPtr2TempG, srcPtr2TempB, p2);  // simd loads
                     compute_non_linear_blend_48_host(p1, p2, pMultiplier, pILocComponent, pJLocComponent);          // non_linear_blend adjustment
-                    rpp_simd_store(rpp_store48_f32pln3_to_i8pkd3_avx, dstPtrTemp, p1);                              // simd stores
+                    rpp_simd_store(rpp_store48_f32pln3_to_i8pkd3_avx<AllowRangeConversion>, dstPtrTemp, p1);                              // simd stores
                     srcPtr1TempR += 16;
                     srcPtr1TempG += 16;
                     srcPtr1TempB += 16;
@@ -1015,7 +1015,7 @@ RppStatus non_linear_blend_i8_i8_host_tensor(Rpp8s *srcPtr1,
                     rpp_simd_load(rpp_load48_i8pkd3_to_f32pln3_avx, srcPtr1Temp, p1);                               // simd loads
                     rpp_simd_load(rpp_load48_i8pkd3_to_f32pln3_avx, srcPtr2Temp, p2);                               // simd loads
                     compute_non_linear_blend_48_host(p1, p2, pMultiplier, pILocComponent, pJLocComponent);          // non_linear_blend adjustment
-                    rpp_simd_store(rpp_store48_f32pln3_to_i8pkd3_avx, dstPtrTemp, p1);                              // simd stores
+                    rpp_simd_store(rpp_store48_f32pln3_to_i8pkd3_avx<AllowRangeConversion>, dstPtrTemp, p1);                              // simd stores
                     srcPtr1Temp += 48;
                     srcPtr2Temp += 48;
                     dstPtrTemp += 48;

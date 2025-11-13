@@ -1125,7 +1125,7 @@ RppStatus saturation_i8_i8_host_tensor(Rpp8s *srcPtr,
                     rpp_simd_load(rpp_load48_i8pln3_to_f32pln3_avx, srcPtrTempR, srcPtrTempG, srcPtrTempB, p);    // simd loads
                     compute_saturation_24_host(p[0], p[2], p[4], pSaturationParam);                               // saturation adjustment
                     compute_saturation_24_host(p[1], p[3], p[5], pSaturationParam);                               // saturation adjustment
-                    rpp_simd_store(rpp_store48_f32pln3_to_i8pkd3_avx, dstPtrTemp, p);                             // simd stores
+                    rpp_simd_store(rpp_store48_f32pln3_to_i8pkd3_avx<AllowRangeConversion>, dstPtrTemp, p);                             // simd stores
 #else
                     __m128 p[12];
                     rpp_simd_load(rpp_load48_i8pln3_to_f32pln3, srcPtrTempR, srcPtrTempG, srcPtrTempB, p);        // simd loads
@@ -1185,7 +1185,7 @@ RppStatus saturation_i8_i8_host_tensor(Rpp8s *srcPtr,
                     rpp_simd_load(rpp_load48_i8pkd3_to_f32pln3_avx, srcPtrTemp, p);    // simd loads
                     compute_saturation_24_host(p[0], p[2], p[4], pSaturationParam);    // saturation adjustment
                     compute_saturation_24_host(p[1], p[3], p[5], pSaturationParam);    // saturation adjustment
-                    rpp_simd_store(rpp_store48_f32pln3_to_i8pkd3_avx, dstPtrTemp, p);  // simd stores
+                    rpp_simd_store(rpp_store48_f32pln3_to_i8pkd3_avx<AllowRangeConversion>, dstPtrTemp, p);  // simd stores
 #else
                     __m128 p[12];
                     rpp_simd_load(rpp_load48_i8pkd3_to_f32pln3, srcPtrTemp, p);        // simd loads

@@ -794,7 +794,7 @@ RppStatus channel_permute_i8_i8_host_tensor(Rpp8s *srcPtr,
                 {
                     __m256 p[6];
                     rpp_simd_load(rpp_load48_i8pln3_to_f32pln3_avx, srcPtrTemp[permutationOrder[0]], srcPtrTemp[permutationOrder[1]], srcPtrTemp[permutationOrder[2]], p);    // simd loads with channel permute
-                    rpp_simd_store(rpp_store48_f32pln3_to_i8pkd3_avx, dstPtrTemp, p);    // simd stores
+                    rpp_simd_store(rpp_store48_f32pln3_to_i8pkd3_avx<AllowRangeConversion>, dstPtrTemp, p);    // simd stores
                     srcPtrTemp[permutationOrder[0]] += vectorIncrementPerChannel;
                     srcPtrTemp[permutationOrder[1]] += vectorIncrementPerChannel;
                     srcPtrTemp[permutationOrder[2]] += vectorIncrementPerChannel;
@@ -849,7 +849,7 @@ RppStatus channel_permute_i8_i8_host_tensor(Rpp8s *srcPtr,
                     pPermute[3] = p[permIdx[3]];
                     pPermute[4] = p[permIdx[4]];
                     pPermute[5] = p[permIdx[5]];
-                    rpp_simd_store(rpp_store48_f32pln3_to_i8pkd3_avx, dstPtrTemp, pPermute);    // simd stores
+                    rpp_simd_store(rpp_store48_f32pln3_to_i8pkd3_avx<AllowRangeConversion>, dstPtrTemp, pPermute);    // simd stores
                     srcPtrTemp += vectorIncrement;
                     dstPtrTemp += vectorIncrement;
                 }

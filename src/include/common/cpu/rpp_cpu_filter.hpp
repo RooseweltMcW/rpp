@@ -92,11 +92,7 @@ inline void convolution_filter_generic_tensor(T **srcPtrTemp, T *dstPtrTemp, Rpp
                                     : std::min(static_cast<Rpp32s>(columnKernelLoopLimit - 1), j); // clamp right padded region 
 
                 // Access and convert pixel
-                Rpp32f pixel;
-                if constexpr (std::is_same<T, Rpp8s>::value)
-                    pixel = static_cast<Rpp32f>(srcPtrTemp[rowOffset][colOffset * channels] + 128);
-                else
-                    pixel = static_cast<Rpp32f>(srcPtrTemp[rowOffset][colOffset * channels]);
+                Rpp32f pixel = static_cast<Rpp32f>(srcPtrTemp[rowOffset][colOffset * channels]);
 
                 // Apply filter
                 accum = std::fmaf(pixel,filterTensor[filterRowOffset + j], accum);
@@ -109,11 +105,7 @@ inline void convolution_filter_generic_tensor(T **srcPtrTemp, T *dstPtrTemp, Rpp
         {
             for (int j = 0; j < kernelSize; j++)
             {
-                Rpp32f pixel;
-                if constexpr (std::is_same<T, Rpp8s>::value)
-                    pixel = static_cast<Rpp32f>(srcPtrTemp[i][j * channels] + 128);
-                else
-                    pixel = static_cast<Rpp32f>(srcPtrTemp[i][j * channels]);
+                Rpp32f pixel = static_cast<Rpp32f>(srcPtrTemp[i][j * channels]);
 
                 // Apply filter
                 accum = std::fmaf(pixel,filterTensor[i * kernelSize + j], accum);
@@ -123,7 +115,15 @@ inline void convolution_filter_generic_tensor(T **srcPtrTemp, T *dstPtrTemp, Rpp
 
     if constexpr (std::is_same<T, Rpp8u>::value || std::is_same<T, Rpp8s>::value)
         accum = nearbyintf(accum);
-    saturate_pixel(accum, dstPtrTemp);
+
+    if constexpr (std::is_same<T, Rpp8u>::value)
+        *dstPtrTemp = static_cast<Rpp8u>(RPPPIXELCHECK(accum));
+    else if constexpr (std::is_same<T, Rpp8s>::value)
+        *dstPtrTemp = static_cast<Rpp8s>(RPPPIXELCHECKI8(accum));
+    else if constexpr (std::is_same<T, Rpp16f>::value)
+        *dstPtrTemp = static_cast<Rpp16f>(RPPPIXELCHECKF32(accum));
+    else
+        *dstPtrTemp = static_cast<Rpp32f>(RPPPIXELCHECKF32(accum));
 }
 
 // process padLength number of columns in each row
@@ -456,7 +456,7 @@ inline void rpp_load_filter_NxN_pln_host(__m256 *pRow, T **srcPtrTemp, Rpp32s ro
         int clampedIndex = std::max(0, std::min(desiredIndex, rowKernelLoopLimit - 1));
 
         if constexpr (std::is_same_v<T, Rpp8s>)
-            rpp_load16_i8_to_f32_avx(srcPtrTemp[clampedIndex], &pRow[k * 2]);
+            rpp_load16_preserve_i8_to_f32_avx(srcPtrTemp[clampedIndex], &pRow[k * 2]);
         else if constexpr (std::is_same_v<T, Rpp8u>)
             rpp_load16_u8_to_f32_avx(srcPtrTemp[clampedIndex], &pRow[k * 2]);
         else if constexpr (std::is_same_v<T, Rpp16f>)
@@ -485,7 +485,7 @@ inline void rpp_load_filter_NxN_pkd_host(__m256 *pRow, T **srcPtrTemp, Rpp32s ro
         if constexpr (std::is_same_v<T, Rpp8u>)
             rpp_load32_u8_to_f32_avx(srcPtrTemp[clampedIndex], &pRow[k * 4]);
         else if constexpr (std::is_same_v<T, Rpp8s>)
-            rpp_load32_i8_to_f32_avx(srcPtrTemp[clampedIndex], &pRow[k * 4]);
+            rpp_load32_preserve_i8_to_f32_avx(srcPtrTemp[clampedIndex], &pRow[k * 4]);
         else if constexpr (std::is_same_v<T, Rpp32f>)
             rpp_load32_f32_to_f32_avx(srcPtrTemp[clampedIndex], &pRow[k * 4]);
         else if constexpr (std::is_same_v<T, Rpp16f>)
@@ -513,7 +513,7 @@ inline void rpp_load_gaussian_filter_9x9_pkd_pln_host(__m256 *pRow, T **srcPtrTe
         if constexpr (std::is_same_v<T, Rpp8u>)
             rpp_load40_u8_to_f32_avx(srcPtrTemp[clampedIndex], &pRow[k * 5]);
         else if constexpr (std::is_same_v<T, Rpp8s>)
-            rpp_load40_i8_to_f32_avx(srcPtrTemp[clampedIndex], &pRow[k * 5]);
+            rpp_load40_preserve_i8_to_f32_avx(srcPtrTemp[clampedIndex], &pRow[k * 5]);
         else if constexpr (std::is_same_v<T, Rpp32f>)
             rpp_load40_f32_to_f32_avx(srcPtrTemp[clampedIndex], &pRow[k * 5]);
         else if constexpr (std::is_same_v<T, Rpp16f>)

@@ -1069,7 +1069,7 @@ RppStatus flip_i8_i8_host_tensor(Rpp8s *srcPtr,
                     __m256 p[6];
 
                     rpp_simd_load(load48FnPlnPln, srcPtrTempR, srcPtrTempG, srcPtrTempB, p);    // simd loads
-                    rpp_simd_store(rpp_store48_f32pln3_to_i8pkd3_avx, dstPtrTemp, p);    // simd stores
+                    rpp_simd_store(rpp_store48_f32pln3_to_i8pkd3_avx<AllowRangeConversion>, dstPtrTemp, p);    // simd stores
 
                     srcPtrTempR += srcPtrIncrementPerChannel;
                     srcPtrTempG += srcPtrIncrementPerChannel;
@@ -1118,7 +1118,7 @@ RppStatus flip_i8_i8_host_tensor(Rpp8s *srcPtr,
                 {
                     __m256 p[6];
                     rpp_simd_load(load48FnPkdPln, srcPtrTemp, p);    // simd loads
-                    rpp_simd_store(rpp_store48_f32pln3_to_i8pkd3_avx, dstPtrTemp, p);    // simd stores
+                    rpp_simd_store(rpp_store48_f32pln3_to_i8pkd3_avx<AllowRangeConversion>, dstPtrTemp, p);    // simd stores
                     srcPtrTemp += srcPtrIncrement;
                     dstPtrTemp += vectorIncrement;
                 }

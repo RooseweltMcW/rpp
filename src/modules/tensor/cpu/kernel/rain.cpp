@@ -1061,7 +1061,7 @@ RppStatus rain_i8_i8_host_tensor(Rpp8s *srcPtr,
                     rpp_simd_load(rpp_load48_i8pln3_to_f32pln3_avx, srcPtr1TempR, srcPtr1TempG, srcPtr1TempB, p1);    // simd loads
                     rpp_simd_load(rpp_load16_i8_to_f32_avx, srcPtr2Temp, p2);                                         // simd loads
                     compute_rain_48_host(p1, p2, pMul);
-                    rpp_simd_store(rpp_store48_f32pln3_to_i8pkd3_avx, dstPtrTemp, p1);                                // simd stores
+                    rpp_simd_store(rpp_store48_f32pln3_to_i8pkd3_avx<AllowRangeConversion>, dstPtrTemp, p1);                                // simd stores
                     srcPtr1TempR += vectorIncrementPerChannel;
                     srcPtr1TempG += vectorIncrementPerChannel;
                     srcPtr1TempB += vectorIncrementPerChannel;
@@ -1108,7 +1108,7 @@ RppStatus rain_i8_i8_host_tensor(Rpp8s *srcPtr,
                     rpp_simd_load(rpp_load48_i8pkd3_to_f32pln3_avx, srcPtr1Temp, p1);    // simd loads
                     rpp_simd_load(rpp_load16_i8_to_f32_avx, srcPtr2Temp, p2);           // simd loads
                     compute_rain_48_host(p1, p2, pMul);
-                    rpp_simd_store(rpp_store48_f32pln3_to_i8pkd3_avx, dstPtrTemp, p1);  // simd stores
+                    rpp_simd_store(rpp_store48_f32pln3_to_i8pkd3_avx<AllowRangeConversion>, dstPtrTemp, p1);  // simd stores
                     srcPtr1Temp += vectorIncrement;
                     srcPtr2Temp += vectorIncrementPerChannel;
                     dstPtrTemp += vectorIncrement;

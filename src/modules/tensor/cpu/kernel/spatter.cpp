@@ -1371,7 +1371,7 @@ RppStatus spatter_i8_i8_host_tensor(Rpp8s *srcPtr,
                     rpp_simd_load(rpp_load16_f32_to_f32_avx, spatterMaskInvPtrTemp, pSpatterMaskInv);    // simd loads
                     rpp_simd_load(rpp_load48_i8pln3_to_f32pln3_avx, srcPtrTempR, srcPtrTempG, srcPtrTempB, p);    // simd loads
                     compute_spatter_48_host(p, pSpatterMaskInv, pSpatterMask, pSpatterValue);    // spatter adjustment
-                    rpp_simd_store(rpp_store48_f32pln3_to_i8pkd3_avx, dstPtrTemp, p);    // simd stores
+                    rpp_simd_store(rpp_store48_f32pln3_to_i8pkd3_avx<AllowRangeConversion>, dstPtrTemp, p);    // simd stores
 #else
                     __m128 pSpatterMask[4], pSpatterMaskInv[4], p[12];
                     rpp_simd_load(rpp_load16_f32_to_f32, spatterMaskPtrTemp, pSpatterMask);    // simd loads
@@ -1438,7 +1438,7 @@ RppStatus spatter_i8_i8_host_tensor(Rpp8s *srcPtr,
                     rpp_simd_load(rpp_load16_f32_to_f32_avx, spatterMaskInvPtrTemp, pSpatterMaskInv);    // simd loads
                     rpp_simd_load(rpp_load48_i8pkd3_to_f32pln3_avx, srcPtrTemp, p);    // simd loads
                     compute_spatter_48_host(p, pSpatterMaskInv, pSpatterMask, pSpatterValue);    // spatter adjustment
-                    rpp_simd_store(rpp_store48_f32pln3_to_i8pkd3_avx, dstPtrTemp, p);    // simd stores
+                    rpp_simd_store(rpp_store48_f32pln3_to_i8pkd3_avx<AllowRangeConversion>, dstPtrTemp, p);    // simd stores
 #else
                     __m128 pSpatterMask[4], pSpatterMaskInv[4], p[12];
                     rpp_simd_load(rpp_load16_f32_to_f32, spatterMaskPtrTemp, pSpatterMask);    // simd loads

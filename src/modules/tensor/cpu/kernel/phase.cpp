@@ -870,7 +870,7 @@ RppStatus phase_i8_i8_host_tensor(Rpp8s *srcPtr1,
                     p1[3] = _mm256_round_ps(_mm256_mul_ps(atan2_ps(p1[3], p2[3]), pMul), _MM_FROUND_TO_ZERO);    // phase computation
                     p1[4] = _mm256_round_ps(_mm256_mul_ps(atan2_ps(p1[4], p2[4]), pMul), _MM_FROUND_TO_ZERO);    // phase computation
                     p1[5] = _mm256_round_ps(_mm256_mul_ps(atan2_ps(p1[5], p2[5]), pMul), _MM_FROUND_TO_ZERO);    // phase computation
-                    rpp_simd_store(rpp_store48_f32pln3_to_i8pkd3_avx, dstPtrTemp, p1);    // simd stores
+                    rpp_simd_store(rpp_store48_f32pln3_to_i8pkd3_avx<AllowRangeConversion>, dstPtrTemp, p1);    // simd stores
 
                     srcPtr1TempR += vectorIncrementPerChannel;
                     srcPtr1TempG += vectorIncrementPerChannel;

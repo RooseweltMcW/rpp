@@ -807,7 +807,7 @@ RppStatus vignette_i8_i8_host_tensor(Rpp8s *srcPtr,
                     __m256 p[6];
                     rpp_simd_load(rpp_load48_i8pln3_to_f32pln3_avx, srcPtrTempR, srcPtrTempG, srcPtrTempB, p);  // simd loads
                     compute_vignette_48_host(p, pMultiplier, pILocComponent, pJLocComponent);     // vignette adjustment
-                    rpp_simd_store(rpp_store48_f32pln3_to_i8pkd3_avx, dstPtrTemp, p);                           // simd stores
+                    rpp_simd_store(rpp_store48_f32pln3_to_i8pkd3_avx<AllowRangeConversion>, dstPtrTemp, p);                           // simd stores
                     srcPtrTempR += 16;
                     srcPtrTempG += 16;
                     srcPtrTempB += 16;
@@ -863,7 +863,7 @@ RppStatus vignette_i8_i8_host_tensor(Rpp8s *srcPtr,
                     __m256 p[6];
                     rpp_simd_load(rpp_load48_i8pkd3_to_f32pln3_avx, srcPtrTemp, p);                         // simd loads
                     compute_vignette_48_host(p, pMultiplier, pILocComponent, pJLocComponent); // vignette adjustment
-                    rpp_simd_store(rpp_store48_f32pln3_to_i8pkd3_avx, dstPtrTemp, p);                       // simd stores
+                    rpp_simd_store(rpp_store48_f32pln3_to_i8pkd3_avx<AllowRangeConversion>, dstPtrTemp, p);                       // simd stores
                     srcPtrTemp += 48;
                     dstPtrTemp += 48;
                 }
