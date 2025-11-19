@@ -945,16 +945,23 @@ inline void write_image_batch_opencv(string outputFolder, Rpp8u *output, RpptDes
 
     Rpp32u elementsInRowMax = dstDescPtr->w * dstDescPtr->c;
     Rpp8u *offsettedOutput = output + dstDescPtr->offsetInBytes;
-    for (int j = 0; (j < dstDescPtr->n) && (imageCnt < maxImageDump) ; j++, imageCnt++)
+    for (int j = 0; (j < 1) ; j++, imageCnt++)
     {
-        Rpp32u height = dstImgSizes[j].height;
+        Rpp32u height = dstImgSizes[j].height*2;
         Rpp32u width = dstImgSizes[j].width;
         Rpp32u elementsInRow = width * dstDescPtr->c;
         Rpp32u outputSize = height * width * dstDescPtr->c;
         Rpp8u *tempOutput = (Rpp8u *)calloc(outputSize, sizeof(Rpp8u));
         Rpp8u *tempOutputRow = tempOutput;
         Rpp8u *outputRow = offsettedOutput + j * dstDescPtr->strides.nStride;
-        for (int k = 0; k < height; k++)
+        for (int k = 0; k < height/2; k++)
+        {
+            memcpy(tempOutputRow, outputRow, elementsInRow * sizeof(Rpp8u));
+            tempOutputRow += elementsInRow;
+            outputRow += elementsInRowMax;
+        }
+        outputRow = offsettedOutput + dstDescPtr->strides.nStride;
+        for (int k = 0; k < height/2; k++)
         {
             memcpy(tempOutputRow, outputRow, elementsInRow * sizeof(Rpp8u));
             tempOutputRow += elementsInRow;
@@ -973,6 +980,10 @@ inline void write_image_batch_opencv(string outputFolder, Rpp8u *output, RpptDes
         }
 
         fs::path pathObj(outputImagePath);
+        size_t pos = outputImagePath.rfind(".jpg");
+        if (pos != std::string::npos) {
+            outputImagePath.replace(pos, 4, ".png"); // Replace ".jpg" with ".png"
+        }
         if (fs::exists(pathObj))
         {
             std::string outPath = outputImagePath.substr(0, outputImagePath.find_last_of('.')) + "_" + to_string(cnt) + outputImagePath.substr(outputImagePath.find_last_of('.'));

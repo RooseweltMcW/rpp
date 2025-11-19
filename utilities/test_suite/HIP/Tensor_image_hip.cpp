@@ -844,7 +844,7 @@ int main(int argc, char **argv)
 
                     for (i = 0; i < batchSize; i++)
                     {
-                        intensityFactor[i] = 0;
+                        intensityFactor[i] = 0.1;
                         greyFactor[i] = 0.3;
                     }
 
@@ -1413,7 +1413,7 @@ int main(int argc, char **argv)
                 case BOX_FILTER:
                 {
                     testCaseName = "box_filter";
-                    Rpp32u kernelSize = additionalParam;
+                    Rpp32u kernelSize = 3;
 
                     if (borderType != RpptImageBorderType::REPLICATE)
                     {

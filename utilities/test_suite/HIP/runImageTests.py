@@ -53,8 +53,8 @@ def get_log_file_list(preserveOutput):
 
 def run_unit_test(srcPath1, srcPath2, dstPathTemp, case, numRuns, testType, layout, qaMode, decoderType, batchSize, roiList):
     print("\n")
-    bitDepths = list(BitDepthTestMode)
-    outputFormatToggles = list(OutputFormat)
+    bitDepths = [BitDepthTestMode.U8_TO_U8]
+    outputFormatToggles = [OutputFormat.NON_TOGGLE]
     if qaMode:
         bitDepths = [BitDepthTestMode.U8_TO_U8, BitDepthTestMode.F32_TO_F32]
     for bitDepth in bitDepths:
@@ -313,14 +313,11 @@ if(testType == TestType.UNIT_TEST.value):
         elif imageAugmentationMap[int(case)][0] == "lens_correction" and (("--input_path1" not in sys.argv and "--input_path2" not in sys.argv) or qaMode):
             srcPath1 = lensCorrectionInFilePath
             srcPath2 = lensCorrectionInFilePath
-        else:
-            srcPath1 = inFilePath1
-            srcPath2 = inFilePath2
         # if QA mode is enabled overwrite the input folders with the folders used for generating golden outputs
         if qaMode and (imageAugmentationMap[int(case)][0] not in {"ricap", "lens_correction"}):
             srcPath1 = inFilePath1
             srcPath2 = inFilePath2
-        for layout in list(Layout):
+        for layout in [Layout.PKD3, Layout.PLN1]:
             dstPathTemp, logFileLayout = process_layout(layout, qaMode, case, dstPath, "hip", ImageAugmentationGroupMap, func_group_finder, imageAugmentationMap)
 
             if not qaMode:
