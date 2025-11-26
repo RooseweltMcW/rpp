@@ -486,14 +486,58 @@ int main(int argc, char **argv)
         CHECK_RETURN_STATUS(hipHostMalloc(&contrastCenter, batchSize * sizeof(Rpp32f)));
     }
 
-    Rpp32f *multiplier = nullptr;
-    Rpp32f *offset = nullptr;
     Rpp32u *mirror = nullptr;
+    Rpp32f *normalizeMeanTensorHost = nullptr;
+    Rpp32f *normalizeStdDevTensorHost = nullptr;
+    Rpp32f *d_normalizeMeanTensor = nullptr;
+    Rpp32f *d_normalizeStdDevTensor = nullptr;
+    Rpp32u *normalizeRoiTensor = nullptr;
+    Rpp32u *d_normalizeRoiTensor = nullptr;
+    RpptGenericDesc srcGenericDescNormalize{};
+    RpptGenericDesc dstGenericDescNormalize{};
+    Rpp32u normalizeAxisMask = 0;
+    size_t normalizeMeanStdCount = 0;
+    size_t normalizeRoiTensorCount = 0;
     if(testCase == CROP_MIRROR_NORMALIZE)
     {
-        CHECK_RETURN_STATUS(hipHostMalloc(&multiplier, batchSize * srcDescPtr->c * sizeof(Rpp32f)));
-        CHECK_RETURN_STATUS(hipHostMalloc(&offset, batchSize * srcDescPtr->c * sizeof(Rpp32f)));
-        CHECK_RETURN_STATUS(hipHostMalloc(&mirror, batchSize * sizeof(Rpp32u)));
+        auto initGenericDescFromTensor = [](RpptDescPtr tensorDesc, RpptGenericDescPtr genericDesc, int batch) {
+            genericDesc->offsetInBytes = tensorDesc->offsetInBytes;
+            genericDesc->dataType = tensorDesc->dataType;
+            genericDesc->layout = tensorDesc->layout;
+            genericDesc->numDims = 4;
+            genericDesc->dims[0] = batch;
+            if (tensorDesc->layout == RpptLayout::NHWC)
+            {
+                genericDesc->dims[1] = tensorDesc->h;
+                genericDesc->dims[2] = tensorDesc->w;
+                genericDesc->dims[3] = tensorDesc->c;
+                genericDesc->strides[0] = tensorDesc->strides.nStride;
+                genericDesc->strides[1] = tensorDesc->strides.hStride;
+                genericDesc->strides[2] = tensorDesc->strides.wStride;
+                genericDesc->strides[3] = tensorDesc->strides.cStride;
+            }
+            else
+            {
+                genericDesc->dims[1] = tensorDesc->c;
+                genericDesc->dims[2] = tensorDesc->h;
+                genericDesc->dims[3] = tensorDesc->w;
+                genericDesc->strides[0] = tensorDesc->strides.nStride;
+                genericDesc->strides[1] = tensorDesc->strides.cStride;
+                genericDesc->strides[2] = tensorDesc->strides.hStride;
+                genericDesc->strides[3] = tensorDesc->strides.wStride;
+            }
+        };
+        initGenericDescFromTensor(srcDescPtr, &srcGenericDescNormalize, batchSize);
+        initGenericDescFromTensor(dstDescPtr, &dstGenericDescNormalize, batchSize);
+        normalizeAxisMask = (srcGenericDescNormalize.layout == RpptLayout::NHWC) ? ((1u << 0) | (1u << 1)) : ((1u << 1) | (1u << 2));
+        normalizeMeanStdCount = static_cast<size_t>(batchSize) * ((srcDescPtr->c > 0) ? static_cast<size_t>(srcDescPtr->c) : 1);
+        normalizeRoiTensorCount = static_cast<size_t>(batchSize) * (srcGenericDescNormalize.numDims - 1) * 2;
+        CHECK_RETURN_STATUS(hipHostMalloc(&normalizeMeanTensorHost, normalizeMeanStdCount * sizeof(Rpp32f)));
+        CHECK_RETURN_STATUS(hipHostMalloc(&normalizeStdDevTensorHost, normalizeMeanStdCount * sizeof(Rpp32f)));
+        CHECK_RETURN_STATUS(hipMalloc(&d_normalizeMeanTensor, normalizeMeanStdCount * sizeof(Rpp32f)));
+        CHECK_RETURN_STATUS(hipMalloc(&d_normalizeStdDevTensor, normalizeMeanStdCount * sizeof(Rpp32f)));
+        CHECK_RETURN_STATUS(hipHostMalloc(&normalizeRoiTensor, normalizeRoiTensorCount * sizeof(Rpp32u)));
+        CHECK_RETURN_STATUS(hipMalloc(&d_normalizeRoiTensor, normalizeRoiTensorCount * sizeof(Rpp32u)));
     }
 
     Rpp32f *exposureFactor = nullptr;
@@ -747,7 +791,7 @@ int main(int argc, char **argv)
                 {
                     testCaseName = "pixelate";
 
-                    Rpp32f pixelationPercentage = 87.5;
+                    Rpp32f pixelationPercentage = 50.0f;
 
                     startWallTime = omp_get_wtime();
                     if (BitDepthTestMode == U8_TO_U8 || BitDepthTestMode == F16_TO_F16 || BitDepthTestMode == F32_TO_F32 || BitDepthTestMode == I8_TO_I8)
@@ -939,10 +983,16 @@ int main(int argc, char **argv)
                 {
                     testCaseName = "resize";
 
+                    const int resizeWidth = std::min(416u, dstDescPtr->w);
+                    const int resizeHeight = std::min(416u, dstDescPtr->h);
                     for (i = 0; i < batchSize; i++)
                     {
-                        dstImgSizes[i].width = roiTensorPtrDst[i].xywhROI.roiWidth = roiTensorPtrSrc[i].xywhROI.roiWidth / 2;
-                        dstImgSizes[i].height = roiTensorPtrDst[i].xywhROI.roiHeight = roiTensorPtrSrc[i].xywhROI.roiHeight / 2;
+                        roiTensorPtrDst[i].xywhROI.xy.x = 113;
+                        roiTensorPtrDst[i].xywhROI.xy.y = 90;
+                        roiTensorPtrDst[i].xywhROI.roiWidth = 227;
+                        roiTensorPtrDst[i].xywhROI.roiHeight = 189;
+                        dstImgSizes[i].width = resizeWidth;
+                        dstImgSizes[i].height = resizeHeight;
                     }
 
                     startWallTime = omp_get_wtime();
@@ -1272,52 +1322,68 @@ int main(int argc, char **argv)
                 }
                 case CROP_MIRROR_NORMALIZE:
                 {
-                    testCaseName = "crop_mirror_normalize";
+                    testCaseName = "normalize";
 
+                    Rpp32f scale = 1.0f;
+                    Rpp32f shift = 0.0f;
+                    Rpp8u computeMeanStddev = 0;
                     if (srcDescPtr->c == 3)
                     {
-                        Rpp32f meanParam[3] = { 60.0f, 80.0f, 100.0f };
-                        Rpp32f stdDevParam[3] = { 0.9f, 0.9f, 0.9f };
-                        Rpp32f offsetParam[3] = { - meanParam[0] / stdDevParam[0], - meanParam[1] / stdDevParam[1], - meanParam[2] / stdDevParam[2] };
-                        Rpp32f multiplierParam[3] = {  1.0f / stdDevParam[0], 1.0f / stdDevParam[1], 1.0f / stdDevParam[2] };
+                        const Rpp32f meanVals[3] = {128.0f, 128.0f, 128.0f};
+                        const Rpp32f stdVals[3] = {1.2f, 1.2f, 1.2f};
+                        for (int batch = 0, idx = 0; batch < batchSize; batch++)
+                            for (int channel = 0; channel < 3; channel++, idx++)
+                            {
+                                normalizeMeanTensorHost[idx] = meanVals[channel];
+                                normalizeStdDevTensorHost[idx] = stdVals[channel];
+                            }
+                    }
+                    else
+                    {
+                        const Rpp32f meanVal = 128.0f;
+                        const Rpp32f stdVal = 1.2f;
+                        int channelCount = (srcDescPtr->c > 0) ? srcDescPtr->c : 1;
+                        for (int batch = 0; batch < batchSize; batch++)
+                            for (int channel = 0; channel < channelCount; channel++)
+                            {
+                                size_t idx = static_cast<size_t>(batch) * static_cast<size_t>(channelCount) + static_cast<size_t>(channel);
+                                normalizeMeanTensorHost[idx] = meanVal;
+                                normalizeStdDevTensorHost[idx] = stdVal;
+                            }
+                    }
 
-                        for (i = 0, j = 0; i < batchSize; i++, j += 3)
+                    Rpp32u nDim = srcGenericDescNormalize.numDims - 1;
+                    for (int batch = 0; batch < batchSize; batch++)
+                    {
+                        Rpp32u *roiStart = normalizeRoiTensor + static_cast<size_t>(batch) * nDim * 2;
+                        Rpp32u *roiLengths = roiStart + nDim;
+                        if (srcGenericDescNormalize.layout == RpptLayout::NHWC)
                         {
-                            multiplier[j] = multiplierParam[0];
-                            offset[j] = offsetParam[0];
-                            multiplier[j + 1] = multiplierParam[1];
-                            offset[j + 1] = offsetParam[1];
-                            multiplier[j + 2] = multiplierParam[2];
-                            offset[j + 2] = offsetParam[2];
-                            mirror[i] = 1;
+                            roiStart[0] = roiTensorPtrSrc[batch].xywhROI.xy.y;
+                            roiStart[1] = roiTensorPtrSrc[batch].xywhROI.xy.x;
+                            roiStart[2] = 0;
+                            roiLengths[0] = roiTensorPtrSrc[batch].xywhROI.roiHeight;
+                            roiLengths[1] = roiTensorPtrSrc[batch].xywhROI.roiWidth;
+                            roiLengths[2] = srcDescPtr->c;
+                        }
+                        else
+                        {
+                            roiStart[0] = 0;
+                            roiStart[1] = roiTensorPtrSrc[batch].xywhROI.xy.y;
+                            roiStart[2] = roiTensorPtrSrc[batch].xywhROI.xy.x;
+                            roiLengths[0] = srcDescPtr->c;
+                            roiLengths[1] = roiTensorPtrSrc[batch].xywhROI.roiHeight;
+                            roiLengths[2] = roiTensorPtrSrc[batch].xywhROI.roiWidth;
                         }
                     }
-                    else if(srcDescPtr->c == 1)
-                    {
-                        Rpp32f meanParam = 100.0f;
-                        Rpp32f stdDevParam = 0.9f;
-                        Rpp32f offsetParam = - meanParam / stdDevParam;
-                        Rpp32f multiplierParam = 1.0f / stdDevParam;
 
-                        for (i = 0; i < batchSize; i++)
-                        {
-                            multiplier[i] = multiplierParam;
-                            offset[i] = offsetParam;
-                            mirror[i] = 1;
-                        }
-                    }
-
-                    for (i = 0; i < batchSize; i++)
-                    {
-                        roiTensorPtrDst[i].xywhROI.xy.x = roiList[0];
-                        roiTensorPtrDst[i].xywhROI.xy.y = roiList[1];
-                        dstImgSizes[i].width = roiTensorPtrDst[i].xywhROI.roiWidth = roiWidthList[i];
-                        dstImgSizes[i].height = roiTensorPtrDst[i].xywhROI.roiHeight = roiHeightList[i];
-                    }
+                    CHECK_RETURN_STATUS(hipMemcpy(d_normalizeMeanTensor, normalizeMeanTensorHost, normalizeMeanStdCount * sizeof(Rpp32f), hipMemcpyHostToDevice));
+                    CHECK_RETURN_STATUS(hipMemcpy(d_normalizeStdDevTensor, normalizeStdDevTensorHost, normalizeMeanStdCount * sizeof(Rpp32f), hipMemcpyHostToDevice));
+                    CHECK_RETURN_STATUS(hipMemcpy(d_normalizeRoiTensor, normalizeRoiTensor, normalizeRoiTensorCount * sizeof(Rpp32u), hipMemcpyHostToDevice));
 
                     startWallTime = omp_get_wtime();
-                    if (BitDepthTestMode == U8_TO_U8 || BitDepthTestMode == F16_TO_F16 || BitDepthTestMode == F32_TO_F32 || BitDepthTestMode == U8_TO_F16 || BitDepthTestMode == U8_TO_F32 || BitDepthTestMode == I8_TO_I8)
-                        rppt_crop_mirror_normalize_gpu(d_input, srcDescPtr, d_output, dstDescPtr, offset, multiplier, mirror, roiTensorPtrDst, roiTypeSrc, handle);
+                    if (BitDepthTestMode == U8_TO_U8 || BitDepthTestMode == F16_TO_F16 || BitDepthTestMode == F32_TO_F32 || BitDepthTestMode == I8_TO_I8)
+                        rppt_normalize_gpu(d_input, &srcGenericDescNormalize, d_output, &dstGenericDescNormalize, normalizeAxisMask, d_normalizeMeanTensor, d_normalizeStdDevTensor, computeMeanStddev, scale, shift, d_normalizeRoiTensor, handle);
                     else
                         missingFuncFlag = 1;
 
@@ -1374,7 +1440,7 @@ int main(int argc, char **argv)
                     testCaseName = "vignette";
 
                     for (i = 0; i < batchSize; i++)
-                        intensity[i] = 6;
+                        intensity[i] = 50.0f;
 
                     startWallTime = omp_get_wtime();
                     if (BitDepthTestMode == U8_TO_U8 || BitDepthTestMode == F16_TO_F16 || BitDepthTestMode == F32_TO_F32 || BitDepthTestMode == I8_TO_I8)
@@ -1578,23 +1644,28 @@ int main(int argc, char **argv)
                         break;
                     }
 
-                    for (i = 0; i < batchSize; i++)
-                    {
-                        dstImgSizes[i].width = roiTensorPtrDst[i].xywhROI.roiWidth = roiTensorPtrSrc[i].xywhROI.roiWidth / 2;
-                        dstImgSizes[i].height = roiTensorPtrDst[i].xywhROI.roiHeight = roiTensorPtrSrc[i].xywhROI.roiWidth / 2;
-                    }
-
+                    const int resizeWidth = std::min(400u, dstDescPtr->w);
+                    const int resizeHeight = std::min(400u, dstDescPtr->h);
                     for (i = 0, j = 0; i < batchSize; i++, j += 3)
                     {
-                        meanTensor[j] = 60.0;
-                        stdDevTensor[j] = 1.0;
+                        meanTensor[j] = 128.0f;
+                        stdDevTensor[j] = 1.2f;
 
-                        meanTensor[j + 1] = 80.0;
-                        stdDevTensor[j + 1] = 1.0;
+                        meanTensor[j + 1] = 128.0f;
+                        stdDevTensor[j + 1] = 1.2f;
 
-                        meanTensor[j + 2] = 100.0;
-                        stdDevTensor[j + 2] = 1.0;
+                        meanTensor[j + 2] = 128.0f;
+                        stdDevTensor[j + 2] = 1.2f;
                         mirror[i] = 1;
+                    }
+                    for (i = 0; i < batchSize; i++)
+                    {
+                        roiTensorPtrDst[i].xywhROI.xy.x = 0;
+                        roiTensorPtrDst[i].xywhROI.xy.y = 0;
+                        roiTensorPtrDst[i].xywhROI.roiWidth = resizeWidth;
+                        roiTensorPtrDst[i].xywhROI.roiHeight = resizeHeight;
+                        dstImgSizes[i].width = resizeWidth;
+                        dstImgSizes[i].height = resizeHeight;
                     }
 
                     startWallTime = omp_get_wtime();
@@ -2099,11 +2170,6 @@ int main(int argc, char **argv)
         CHECK_RETURN_STATUS(hipHostFree(contrastFactor));
         CHECK_RETURN_STATUS(hipHostFree(contrastCenter));
     }
-    if(testCase == CROP_MIRROR_NORMALIZE)
-    {
-        CHECK_RETURN_STATUS(hipHostFree(multiplier));
-        CHECK_RETURN_STATUS(hipHostFree(offset));
-    }
     if(exposureFactor != NULL)
         CHECK_RETURN_STATUS(hipHostFree(exposureFactor));
     if(gammaVal != NULL)
@@ -2112,6 +2178,18 @@ int main(int argc, char **argv)
         CHECK_RETURN_STATUS(hipHostFree(stdDevTensor));
     if(meanTensor != NULL)
         CHECK_RETURN_STATUS(hipHostFree(meanTensor));
+    if(normalizeMeanTensorHost != nullptr)
+        CHECK_RETURN_STATUS(hipHostFree(normalizeMeanTensorHost));
+    if(normalizeStdDevTensorHost != nullptr)
+        CHECK_RETURN_STATUS(hipHostFree(normalizeStdDevTensorHost));
+    if(d_normalizeMeanTensor != nullptr)
+        CHECK_RETURN_STATUS(hipFree(d_normalizeMeanTensor));
+    if(d_normalizeStdDevTensor != nullptr)
+        CHECK_RETURN_STATUS(hipFree(d_normalizeStdDevTensor));
+    if(normalizeRoiTensor != nullptr)
+        CHECK_RETURN_STATUS(hipHostFree(normalizeRoiTensor));
+    if(d_normalizeRoiTensor != nullptr)
+        CHECK_RETURN_STATUS(hipFree(d_normalizeRoiTensor));
     if(testCase == NOISE)
     {
         if(additionalParam == 0)
