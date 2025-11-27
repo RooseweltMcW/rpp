@@ -26,7 +26,7 @@ SOFTWARE.
 #include "rpp_cpu_rgb_hsv_conversion.hpp"
 #include "rpp_cpu_simd_math.hpp"
 
-// #if __AVX2__
+#if __AVX2__
 
 inline void compute_saturation_24_host(__m256 &pVecR, __m256 &pVecG, __m256 &pVecB, __m256 *pSaturationParam)
 {
@@ -45,7 +45,7 @@ inline void compute_saturation_24_host(__m256 &pVecR, __m256 &pVecG, __m256 &pVe
     hsv_to_rgb(pVecR, pVecG, pVecB, pH, pS, pV, pAdd);
 }
 
-// #else
+#else
 
 inline void compute_saturation_12_host(__m128 &pVecR, __m128 &pVecG, __m128 &pVecB, __m128 *pSaturationParam)
 {
@@ -64,7 +64,7 @@ inline void compute_saturation_12_host(__m128 &pVecR, __m128 &pVecG, __m128 &pVe
     hsv_to_rgb(pVecR, pVecG, pVecB, pH, pS, pV, pAdd);
 }
 
-// #endif
+#endif
 
 inline void compute_saturation_host(RpptFloatRGB *pixel, Rpp32f saturationParam)
 {
