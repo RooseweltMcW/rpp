@@ -569,12 +569,7 @@ RppStatus lut_i8_i8_host_tensor(Rpp8s *srcPtr,
 
                     int vectorLoopCount = 0;
                     for (; vectorLoopCount < bufferLength; vectorLoopCount++)
-                    {
-                        //*dstPtrTemp = lutPtr[(Rpp32s)*srcPtrTemp + 128];
                         *dstPtrTemp++ = lutPtr[(Rpp32s)*srcPtrTemp++ + 128];
-                        //srcPtrTemp++;
-                        //dstPtrTemp++;
-                    }
 
                     srcPtrRow += srcDescPtr->strides.hStride;
                     dstPtrRow += dstDescPtr->strides.hStride;

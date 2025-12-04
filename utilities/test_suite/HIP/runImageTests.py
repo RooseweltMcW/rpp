@@ -56,7 +56,7 @@ def run_unit_test(srcPath1, srcPath2, dstPathTemp, case, numRuns, testType, layo
     bitDepths = list(BitDepthTestMode)
     outputFormatToggles = list(OutputFormat)
     if qaMode:
-        bitDepths = [BitDepthTestMode.U8_TO_U8, BitDepthTestMode.F32_TO_F32]
+        bitDepths = [BitDepthTestMode.U8_TO_U8, BitDepthTestMode.F32_TO_F32, BitDepthTestMode.F16_TO_F16, BitDepthTestMode.I8_TO_I8]
     for bitDepth in bitDepths:
         for outputFormatToggle in outputFormatToggles:
             # There is no layout toggle for PLN1 case, so skip this case

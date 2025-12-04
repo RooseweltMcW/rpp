@@ -792,7 +792,7 @@ RppStatus exposure_i8_i8_host_tensor(Rpp8s *srcPtr,
                     }
                     for (; vectorLoopCount < bufferLength; vectorLoopCount++)
                     {
-                        *dstPtrTemp = (Rpp8s) RPPPIXELCHECK((Rpp32f) ((*srcPtrTemp) + 128) * multiplyingFactor - 128);
+                        *dstPtrTemp = (Rpp8s) RPPPIXELCHECKI8((Rpp32f) ((*srcPtrTemp) + 128) * multiplyingFactor - 128);
 
                         srcPtrTemp++;
                         dstPtrTemp++;

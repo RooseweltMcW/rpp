@@ -986,9 +986,10 @@ inline void write_image_batch_opencv(string outputFolder, Rpp8u *output, RpptDes
 }
 
 // compares the output of PKD3-PKD3 and PLN1-PLN1 variants
-void compare_outputs_pkd_and_pln1(Rpp8u* output, Rpp8u* refOutput, RpptDescPtr dstDescPtr, RpptImagePatch *dstImgSizes, int refOutputHeight, int refOutputWidth, int refOutputSize, int &fileMatch)
+template <typename T>
+void compare_outputs_pkd_and_pln1(T* output, T* refOutput, RpptDescPtr dstDescPtr, RpptImagePatch *dstImgSizes, int refOutputHeight, int refOutputWidth, int refOutputSize, int &fileMatch)
 {
-    Rpp8u *rowTemp, *rowTempRef, *outVal, *outRefVal, *outputTemp, *outputTempRef;
+    T *rowTemp, *rowTempRef, *outVal, *outRefVal, *outputTemp, *outputTempRef;
     for(int imageCnt = 0; imageCnt < dstDescPtr->n; imageCnt++)
     {
         outputTemp = output + imageCnt * dstDescPtr->strides.nStride;
@@ -1047,9 +1048,10 @@ void compare_outputs_pkd_and_pln1(Rpp32f* output, Rpp32f* refOutput, RpptDescPtr
 }
 
 // compares the output of PLN3-PLN3 variants.This function compares the output buffer of pln3 format with its reference output in pkd3 format.
-void compare_outputs_pln3(Rpp8u* output, Rpp8u* refOutput, RpptDescPtr dstDescPtr, RpptImagePatch *dstImgSizes, int refOutputHeight, int refOutputWidth, int refOutputSize, int &fileMatch)
+template <typename T>
+void compare_outputs_pln3(T* output, T* refOutput, RpptDescPtr dstDescPtr, RpptImagePatch *dstImgSizes, int refOutputHeight, int refOutputWidth, int refOutputSize, int &fileMatch)
 {
-    Rpp8u *rowTemp, *rowTempRef, *outVal, *outRefVal, *outputTemp, *outputTempRef, *outputTempChn, *outputTempRefChn;
+    T *rowTemp, *rowTempRef, *outVal, *outRefVal, *outputTemp, *outputTempRef, *outputTempChn, *outputTempRefChn;
     for(int imageCnt = 0; imageCnt < dstDescPtr->n; imageCnt++)
     {
         outputTemp = output + imageCnt * dstDescPtr->strides.nStride;
@@ -1207,17 +1209,54 @@ inline void compare_output(void* output, string funcName, RpptDescPtr srcDescPtr
             compare_outputs_pkd_and_pln1((Rpp8u*)output, binaryContent + pln1RefStride, dstDescPtr, dstImgSizes, refOutputHeight, refOutputWidth, refOutputSize, fileMatch);
         free(binaryContent);
     }
+    else if(dstDescPtr->dataType == RpptDataType::I8)
+    {
+        Rpp8s* binaryContent = (Rpp8s*) malloc(binOutputSize * sizeof(Rpp8s));
+        read_bin_file(refFile, binaryContent);
+
+        if(dstDescPtr->layout == RpptLayout::NHWC)
+            compare_outputs_pkd_and_pln1((Rpp8s*)output, binaryContent, dstDescPtr, dstImgSizes, refOutputHeight, refOutputWidth, refOutputSize, fileMatch);
+        else if(dstDescPtr->layout == RpptLayout::NCHW && dstDescPtr->c == 3)
+            compare_outputs_pln3((Rpp8s*)output, binaryContent, dstDescPtr, dstImgSizes, refOutputHeight, refOutputWidth, refOutputSize, fileMatch);
+        else
+            compare_outputs_pkd_and_pln1((Rpp8s*)output, binaryContent + pln1RefStride, dstDescPtr, dstImgSizes, refOutputHeight, refOutputWidth, refOutputSize, fileMatch);
+
+        free(binaryContent);
+    }
     else
     {
         Rpp32f* binaryContent = (Rpp32f *)malloc(binOutputSize * sizeof(Rpp32f));
         read_bin_file(refFile, binaryContent);
 
-        if(dstDescPtr->layout == RpptLayout::NHWC)
-            compare_outputs_pkd_and_pln1((Rpp32f*)output, binaryContent, dstDescPtr, dstImgSizes, refOutputHeight, refOutputWidth, refOutputSize, fileMatch);
-        else if(dstDescPtr->layout == RpptLayout::NCHW && dstDescPtr->c == 3)
-            compare_outputs_pln3((Rpp32f*)output, binaryContent, dstDescPtr, dstImgSizes, refOutputHeight, refOutputWidth, refOutputSize, fileMatch);
+        Rpp32f* outputF32;
+        Rpp16f* out16 = (Rpp16f*)output;
+
+        if (dstDescPtr->dataType == RpptDataType::F16)
+        {
+            outputF32 = (Rpp32f*)malloc(dstDescPtr->n *
+                                        dstDescPtr->h *
+                                        dstDescPtr->w *
+                                        dstDescPtr->c *
+                                        sizeof(Rpp32f));
+
+            int total = dstDescPtr->n * dstDescPtr->h * dstDescPtr->w * dstDescPtr->c;
+            for (int i = 0; i < total; i++)
+                outputF32[i] = (float)out16[i];
+        }
         else
-            compare_outputs_pkd_and_pln1((Rpp32f*)output, binaryContent + pln1RefStride, dstDescPtr, dstImgSizes, refOutputHeight, refOutputWidth, refOutputSize, fileMatch);
+            outputF32 = (Rpp32f*)output;
+
+        // Compare normally
+        if(dstDescPtr->layout == RpptLayout::NHWC)
+            compare_outputs_pkd_and_pln1(outputF32, binaryContent, dstDescPtr, dstImgSizes, refOutputHeight, refOutputWidth, refOutputSize, fileMatch);
+        else if(dstDescPtr->layout == RpptLayout::NCHW && dstDescPtr->c == 3)
+            compare_outputs_pln3(outputF32, binaryContent, dstDescPtr, dstImgSizes, refOutputHeight, refOutputWidth, refOutputSize, fileMatch);
+        else
+            compare_outputs_pkd_and_pln1(outputF32, binaryContent + pln1RefStride, dstDescPtr, dstImgSizes, refOutputHeight, refOutputWidth, refOutputSize, fileMatch);
+
+        if (dstDescPtr->dataType == RpptDataType::F16)
+            free(outputF32);
+
         free(binaryContent);
     }
 
