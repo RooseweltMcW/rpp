@@ -24,7 +24,7 @@ SOFTWARE.
 
 #include <random>
 #include "rppdefs.h"
-#include "rppi_validate.hpp"
+#include "rppt_validate.hpp"
 #include "rpp_cpu_random.hpp"
 #include "api_helpers.hpp"
 #include "fog_mask.hpp"
@@ -32,9 +32,9 @@ SOFTWARE.
 #include "rppt_tensor_effects_augmentations.h"
 #include "host_tensor_executors.hpp"
 
-#ifdef HIP_COMPILE
+#ifdef GPU_SUPPORT
 #include "hip_tensor_executors.hpp"
-#endif // HIP_COMPILE
+#endif // GPU_SUPPORT
 
 /******************** gridmask ********************/
 
@@ -1581,7 +1581,6 @@ RppStatus rppt_gridmask_gpu(RppPtr_t srcPtr,
                             RpptRoiType roiType,
                             rppHandle_t rppHandle)
 {
-#ifdef HIP_COMPILE
     if ((srcDescPtr->dataType == RpptDataType::U8) && (dstDescPtr->dataType == RpptDataType::U8))
     {
         CHECK_RETURN_STATUS(hipMemset((void *)(static_cast<Rpp8u*>(dstPtr) + dstDescPtr->offsetInBytes), 0, dstDescPtr->n * dstDescPtr->strides.nStride * sizeof(Rpp8u)));
@@ -1644,9 +1643,6 @@ RppStatus rppt_gridmask_gpu(RppPtr_t srcPtr,
     }
 
     return RPP_SUCCESS;
-#elif defined(OCL_COMPILE)
-    return RPP_ERROR_NOT_IMPLEMENTED;
-#endif // backend
 }
 
 /******************** spatter ********************/
@@ -1660,7 +1656,6 @@ RppStatus rppt_spatter_gpu(RppPtr_t srcPtr,
                            RpptRoiType roiType,
                            rppHandle_t rppHandle)
 {
-#ifdef HIP_COMPILE
     RpptROI roiTensorPtrSrcHost[dstDescPtr->n];
     CHECK_RETURN_STATUS(hipMemcpy(roiTensorPtrSrcHost, roiTensorPtrSrc, dstDescPtr->n * sizeof(RpptROI), hipMemcpyDeviceToHost));
     if (roiType == RpptRoiType::XYWH)
@@ -1745,9 +1740,6 @@ RppStatus rppt_spatter_gpu(RppPtr_t srcPtr,
     CHECK_RETURN_STATUS(hipHostFree(maskLocArrHostX));
     CHECK_RETURN_STATUS(hipHostFree(maskLocArrHostY));
     return RPP_SUCCESS;
-#elif defined(OCL_COMPILE)
-    return RPP_ERROR_NOT_IMPLEMENTED;
-#endif // backend
 }
 
 /******************** salt_and_pepper_noise ********************/
@@ -1765,7 +1757,6 @@ RppStatus rppt_salt_and_pepper_noise_gpu(RppPtr_t srcPtr,
                                          RpptRoiType roiType,
                                          rppHandle_t rppHandle)
 {
-#ifdef HIP_COMPILE
     for(int i = 0; i < srcDescPtr->n; i++)
         if (!RPPINRANGE(noiseProbabilityTensor[i], 0, 1) || !RPPINRANGE(saltProbabilityTensor[i], 0, 1) || !RPPINRANGE(saltValueTensor[i], 0, 1) || !RPPINRANGE(pepperValueTensor[i], 0, 1))
             return RPP_ERROR_INVALID_ARGUMENTS;
@@ -1844,9 +1835,6 @@ RppStatus rppt_salt_and_pepper_noise_gpu(RppPtr_t srcPtr,
     }
 
     return RPP_SUCCESS;
-#elif defined(OCL_COMPILE)
-    return RPP_ERROR_NOT_IMPLEMENTED;
-#endif // backend
 }
 
 /******************** shot_noise ********************/
@@ -1861,7 +1849,6 @@ RppStatus rppt_shot_noise_gpu(RppPtr_t srcPtr,
                               RpptRoiType roiType,
                               rppHandle_t rppHandle)
 {
-#ifdef HIP_COMPILE
     for(int i = 0; i < srcDescPtr->n; i++)
         if (RPPISLESSER(shotNoiseFactorTensor[i], 0))
             return RPP_ERROR_INVALID_ARGUMENTS;
@@ -1930,9 +1917,6 @@ RppStatus rppt_shot_noise_gpu(RppPtr_t srcPtr,
     }
 
     return RPP_SUCCESS;
-#elif defined(OCL_COMPILE)
-    return RPP_ERROR_NOT_IMPLEMENTED;
-#endif // backend
 }
 
 /******************** gaussian_noise ********************/
@@ -1948,7 +1932,6 @@ RppStatus rppt_gaussian_noise_gpu(RppPtr_t srcPtr,
                                   RpptRoiType roiType,
                                   rppHandle_t rppHandle)
 {
-#ifdef HIP_COMPILE
 
     RpptXorwowStateBoxMuller xorwowInitialState;
     xorwowInitialState.x[0] = 0x75BCD15 + seed;
@@ -2018,9 +2001,6 @@ RppStatus rppt_gaussian_noise_gpu(RppPtr_t srcPtr,
     }
 
     return RPP_SUCCESS;
-#elif defined(OCL_COMPILE)
-    return RPP_ERROR_NOT_IMPLEMENTED;
-#endif // backend
 }
 
 RppStatus rppt_gaussian_noise_voxel_gpu(RppPtr_t srcPtr,
@@ -2034,7 +2014,6 @@ RppStatus rppt_gaussian_noise_voxel_gpu(RppPtr_t srcPtr,
                                         RpptRoi3DType roiType,
                                         rppHandle_t rppHandle)
 {
-#ifdef HIP_COMPILE
     if ((srcGenericDescPtr->layout != RpptLayout::NCDHW) && (srcGenericDescPtr->layout != RpptLayout::NDHWC)) return RPP_ERROR_INVALID_SRC_LAYOUT;
     if ((dstGenericDescPtr->layout != RpptLayout::NCDHW) && (dstGenericDescPtr->layout != RpptLayout::NDHWC)) return RPP_ERROR_INVALID_DST_LAYOUT;
     if (srcGenericDescPtr->layout != dstGenericDescPtr->layout) return RPP_ERROR_INVALID_ARGUMENTS;
@@ -2083,9 +2062,6 @@ RppStatus rppt_gaussian_noise_voxel_gpu(RppPtr_t srcPtr,
     }
 
     return RPP_SUCCESS;
-#elif defined(OCL_COMPILE)
-    return RPP_ERROR_NOT_IMPLEMENTED;
-#endif // backend
 }
 
 /******************** non_linear_blend ********************/
@@ -2100,7 +2076,6 @@ RppStatus rppt_non_linear_blend_gpu(RppPtr_t srcPtr1,
                                     RpptRoiType roiType,
                                     rppHandle_t rppHandle)
 {
-#ifdef HIP_COMPILE
     for(int i = 0; i < srcDescPtr->n; i++)
         if (stdDevTensor[i] == 0)
             return RPP_ERROR_ZERO_DIVISION;
@@ -2155,9 +2130,6 @@ RppStatus rppt_non_linear_blend_gpu(RppPtr_t srcPtr1,
     }
 
     return RPP_SUCCESS;
-#elif defined(OCL_COMPILE)
-    return RPP_ERROR_NOT_IMPLEMENTED;
-#endif // backend
 }
 
 /******************** water ********************/
@@ -2176,7 +2148,6 @@ RppStatus rppt_water_gpu(RppPtr_t srcPtr,
                          RpptRoiType roiType,
                          rppHandle_t rppHandle)
 {
-#ifdef HIP_COMPILE
     if (srcDescPtr->dataType != dstDescPtr->dataType) return RPP_ERROR_INVALID_SRC_OR_DST_DATATYPE;
     if ((srcDescPtr->layout == RpptLayout::NCDHW) || (srcDescPtr->layout == RpptLayout::NDHWC)) return RPP_ERROR_INVALID_SRC_LAYOUT;
     if ((dstDescPtr->layout == RpptLayout::NCDHW) || (dstDescPtr->layout == RpptLayout::NDHWC)) return RPP_ERROR_INVALID_DST_LAYOUT;
@@ -2247,9 +2218,6 @@ RppStatus rppt_water_gpu(RppPtr_t srcPtr,
     }
 
     return RPP_SUCCESS;
-#elif defined(OCL_COMPILE)
-    return RPP_ERROR_NOT_IMPLEMENTED;
-#endif // backend
 }
 
 /******************** vignette ********************/
@@ -2263,7 +2231,6 @@ RppStatus rppt_vignette_gpu(RppPtr_t srcPtr,
                             RpptRoiType roiType,
                             rppHandle_t rppHandle)
 {
-#ifdef HIP_COMPILE
     if (srcDescPtr->dataType != dstDescPtr->dataType) return RPP_ERROR_INVALID_SRC_OR_DST_DATATYPE;
     if ((srcDescPtr->layout == RpptLayout::NCDHW) || (srcDescPtr->layout == RpptLayout::NDHWC)) return RPP_ERROR_INVALID_SRC_LAYOUT;
     if ((dstDescPtr->layout == RpptLayout::NCDHW) || (dstDescPtr->layout == RpptLayout::NDHWC)) return RPP_ERROR_INVALID_DST_LAYOUT;
@@ -2314,9 +2281,6 @@ RppStatus rppt_vignette_gpu(RppPtr_t srcPtr,
     }
 
     return RPP_SUCCESS;
-#elif defined(OCL_COMPILE)
-    return RPP_ERROR_NOT_IMPLEMENTED;
-#endif // backend
 }
 
 /******************** erase ********************/
@@ -2332,7 +2296,6 @@ RppStatus rppt_erase_gpu(RppPtr_t srcPtr,
                          RpptRoiType roiType,
                          rppHandle_t rppHandle)
 {
-#ifdef HIP_COMPILE
 
     if ((srcDescPtr->dataType == RpptDataType::U8) && (dstDescPtr->dataType == RpptDataType::U8))
     {
@@ -2388,9 +2351,6 @@ RppStatus rppt_erase_gpu(RppPtr_t srcPtr,
     }
 
     return RPP_SUCCESS;
-#elif defined(OCL_COMPILE)
-    return RPP_ERROR_NOT_IMPLEMENTED;
-#endif // backend
 }
 
 /******************** ricap ********************/
@@ -2404,7 +2364,6 @@ RppStatus rppt_ricap_gpu(RppPtr_t srcPtr,
                          RpptRoiType roiType,
                          rppHandle_t rppHandle)
 {
-#ifdef HIP_COMPILE
     if(srcDescPtr->n == 1) // BatchSize should always be greater than 1
         return RPP_ERROR;
 
@@ -2460,9 +2419,6 @@ RppStatus rppt_ricap_gpu(RppPtr_t srcPtr,
     }
 
     return RPP_SUCCESS;
-#elif defined(OCL_COMPILE)
-    return RPP_ERROR_NOT_IMPLEMENTED;
-#endif // backend
 }
 
 /******************** glitch ********************/
@@ -2476,7 +2432,6 @@ RppStatus rppt_glitch_gpu(RppPtr_t srcPtr,
                           RpptRoiType roiType,
                           rppHandle_t rppHandle)
 {
-#ifdef HIP_COMPILE
     if ((srcDescPtr->dataType == RpptDataType::U8) && (dstDescPtr->dataType == RpptDataType::U8))
     {
         hip_exec_glitch_tensor(static_cast<Rpp8u*>(srcPtr) + srcDescPtr->offsetInBytes,
@@ -2523,9 +2478,6 @@ RppStatus rppt_glitch_gpu(RppPtr_t srcPtr,
     }
 
     return RPP_SUCCESS;
-#elif defined(OCL_COMPILE)
-    return RPP_ERROR_NOT_IMPLEMENTED;
-#endif // backend
 }
 
 /******************** jitter ********************/
@@ -2540,7 +2492,6 @@ RppStatus rppt_jitter_gpu(RppPtr_t srcPtr,
                           RpptRoiType roiType,
                           rppHandle_t rppHandle)
 {
-#ifdef HIP_COMPILE
 
     RpptXorwowStateBoxMuller xorwowInitialState;
     xorwowInitialState.x[0] = 0x75BCD15 + seed;
@@ -2606,9 +2557,6 @@ RppStatus rppt_jitter_gpu(RppPtr_t srcPtr,
     }
 
     return RPP_SUCCESS;
-#elif defined(OCL_COMPILE)
-    return RPP_ERROR_NOT_IMPLEMENTED;
-#endif // backend
 }
 
 /******************** pixelate ********************/
@@ -2623,7 +2571,6 @@ RppStatus rppt_pixelate_gpu(RppPtr_t srcPtr,
                             RpptRoiType roiType,
                             rppHandle_t rppHandle)
 {
-#ifdef HIP_COMPILE
 
     // This function performs pixelation through a two-step resizing process:
     // 1. The image is first resized to a smaller intermediate size using bilinear interpolation.
@@ -2792,9 +2739,6 @@ RppStatus rppt_pixelate_gpu(RppPtr_t srcPtr,
         CHECK_RETURN_STATUS(hipStreamSynchronize(rpp::deref(rppHandle).GetStream()));
     }
     return RPP_SUCCESS;
-#elif defined(OCL_COMPILE)
-    return RPP_ERROR_NOT_IMPLEMENTED;
-#endif // backend
 }
 
 /******************** fog ********************/
@@ -2809,7 +2753,6 @@ RppStatus rppt_fog_gpu(RppPtr_t srcPtr,
                        RpptRoiType roiType,
                        rppHandle_t rppHandle)
 {
-#ifdef HIP_COMPILE
     // Do the setup required for resizing the fog mask based on max size in the batch
 
     // Initialize and set descriptor for original fog mask
@@ -2923,9 +2866,6 @@ RppStatus rppt_fog_gpu(RppPtr_t srcPtr,
     }
 
     return RPP_SUCCESS;
-#elif defined(OCL_COMPILE)
-    return RPP_ERROR_NOT_IMPLEMENTED;
-#endif // backend
 }
 
 /******************** rain ********************/
@@ -2943,7 +2883,6 @@ RppStatus rppt_rain_gpu(RppPtr_t srcPtr,
                         RpptRoiType roiType,
                         rppHandle_t rppHandle)
 {
-#ifdef HIP_COMPILE
     if ((srcDescPtr->dataType == RpptDataType::U8) && (dstDescPtr->dataType == RpptDataType::U8))
     {
         hip_exec_rain_tensor(static_cast<Rpp8u*>(srcPtr) + srcDescPtr->offsetInBytes,
@@ -3006,9 +2945,6 @@ RppStatus rppt_rain_gpu(RppPtr_t srcPtr,
     }
 
     return RPP_SUCCESS;
-#elif defined(OCL_COMPILE)
-    return RPP_ERROR_NOT_IMPLEMENTED;
-#endif // backend
 }
 
 RppStatus rppt_posterize_gpu(RppPtr_t srcPtr,
@@ -3020,7 +2956,6 @@ RppStatus rppt_posterize_gpu(RppPtr_t srcPtr,
                              RpptRoiType roiType,
                              rppHandle_t rppHandle)
 {
-#ifdef HIP_COMPILE
     if ((srcDescPtr->layout != RpptLayout::NCHW) && (srcDescPtr->layout != RpptLayout::NHWC)) return RPP_ERROR_INVALID_SRC_LAYOUT;
     if ((dstDescPtr->layout != RpptLayout::NCHW) && (dstDescPtr->layout != RpptLayout::NHWC)) return RPP_ERROR_INVALID_DST_LAYOUT;
     for(int i = 0; i < srcDescPtr->n; i++)
@@ -3061,9 +2996,6 @@ RppStatus rppt_posterize_gpu(RppPtr_t srcPtr,
     }
 
     return RPP_SUCCESS;
-#elif defined(OCL_COMPILE)
-    return RPP_ERROR_NOT_IMPLEMENTED;
-#endif // backend
 }
 
 /******************** solarize ********************/
@@ -3077,7 +3009,6 @@ RppStatus rppt_solarize_gpu(RppPtr_t srcPtr,
                             RpptRoiType roiType,
                             rppHandle_t rppHandle)
 {
-#ifdef HIP_COMPILE
     if ((srcDescPtr->layout != RpptLayout::NCHW) && (srcDescPtr->layout != RpptLayout::NHWC)) return RPP_ERROR_INVALID_SRC_LAYOUT;
     if ((dstDescPtr->layout != RpptLayout::NCHW) && (dstDescPtr->layout != RpptLayout::NHWC)) return RPP_ERROR_INVALID_DST_LAYOUT;
     for(int i = 0; i < srcDescPtr->n; i++)
@@ -3130,9 +3061,6 @@ RppStatus rppt_solarize_gpu(RppPtr_t srcPtr,
     }
 
     return RPP_SUCCESS;
-#elif defined(OCL_COMPILE)
-    return RPP_ERROR_NOT_IMPLEMENTED;
-#endif // backend
 }
 
 /******************** snow ********************/
