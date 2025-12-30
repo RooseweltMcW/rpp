@@ -87,6 +87,7 @@ imageAugmentationMap = {
     21: ["resize", "HOST", "HIP"],
     23: ["rotate", "HOST", "HIP"],
     24: ["warp_affine", "HOST", "HIP"],
+    25: ["fisheye", "HOST", "HIP"],
     26: ["lens_correction", "HOST", "HIP"],
     28: ["warp_perspective", "HOST", "HIP"],
     29: ["water", "HOST", "HIP"],
@@ -172,7 +173,7 @@ ImageAugmentationGroupMap = {
         "pixelate", "jitter", "noise", "fog", "rain", "water", "non_linear_blend", "erase", "glitch", "vignette", "ricap", "gridmask", "spatter", "posterize", "snow"
     ],
     "geometric_augmentations": [
-        "flip", "resize", "rotate", "warp_affine", "lens_correction", "warp_perspective", "crop_and_patch", "crop", "crop_mirror_normalize", "resize_crop_mirror", "phase", "remap", "resize_mirror_normalize", "slice", "jpeg_compression_distortion"
+        "flip", "resize", "rotate", "warp_affine", "lens_correction", "warp_perspective", "crop_and_patch", "crop", "crop_mirror_normalize", "resize_crop_mirror", "phase", "remap", "resize_mirror_normalize", "slice", "jpeg_compression_distortion", "fisheye"
     ],
     "filter_augmentations": [
         "box_filter", "median_filter", "gaussian_filter"
