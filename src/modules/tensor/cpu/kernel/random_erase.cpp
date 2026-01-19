@@ -30,7 +30,6 @@ RppStatus random_erase_host_tensor(T *srcPtr,
                                    T *dstPtr,
                                    RpptDescPtr dstDescPtr,
                                    RpptRoiLtrb *anchorBoxInfoTensor,
-                                   Rpp32u *numBoxesTensor,
                                    T *noiseBuffer,
                                    RpptROIPtr roiTensorPtrSrc,
                                    RpptRoiType roiType,
@@ -48,9 +47,7 @@ RppStatus random_erase_host_tensor(T *srcPtr,
         RpptROIPtr roiPtrInput = &roiTensorPtrSrc[batchCount];
         compute_roi_validation_host(roiPtrInput, &roi, &roiDefault, roiType);
 
-        Rpp32u numBoxes = numBoxesTensor[batchCount];
-        RpptRoiLtrb *anchorBoxInfo = anchorBoxInfoTensor + batchCount * numBoxes;
-
+        RpptRoiLtrb anchorBoxInfo = anchorBoxInfoTensor[batchCount];
         T *srcPtrImage, *dstPtrImage;
         srcPtrImage = srcPtr + batchCount * srcDescPtr->strides.nStride;
         dstPtrImage = dstPtr + batchCount * dstDescPtr->strides.nStride;
@@ -90,38 +87,36 @@ RppStatus random_erase_host_tensor(T *srcPtr,
                 dstPtrRowB += dstDescPtr->strides.hStride;
             }
 
-            for(int count = 0; count < numBoxes; count++)
+            Rpp32u x1 = static_cast<Rpp32u>(RPPPRANGECHECK(anchorBoxInfo.lt.x, roi.xywhROI.xy.x, roi.xywhROI.roiWidth));
+            Rpp32u y1 = static_cast<Rpp32u>(RPPPRANGECHECK(anchorBoxInfo.lt.y, roi.xywhROI.xy.y, roi.xywhROI.roiHeight));
+            Rpp32u x2 = static_cast<Rpp32u>(RPPPRANGECHECK(anchorBoxInfo.rb.x, x1, roi.xywhROI.roiWidth));
+            Rpp32u y2 = static_cast<Rpp32u>(RPPPRANGECHECK(anchorBoxInfo.rb.y, y1, roi.xywhROI.roiHeight));
+
+            Rpp32u pixelLocation = (y1 * dstDescPtr->strides.hStride) + (x1 * dstDescPtr->strides.wStride);
+            Rpp32u boxHeight = y2 - y1 + 1;
+            Rpp32u boxWidth = x2 - x1 + 1;
+
+            T *dstPtrTempR, *dstPtrTempG, *dstPtrTempB;
+            dstPtrTempR = dstPtrImage + pixelLocation;
+            dstPtrTempG = dstPtrTempR + dstDescPtr->strides.cStride;
+            dstPtrTempB = dstPtrTempG + dstDescPtr->strides.cStride;
+            for (int i = 0; i < boxHeight; i++)
             {
-                Rpp32u x1 = static_cast<Rpp32u>(RPPPRANGECHECK(anchorBoxInfo[count].lt.x, roi.xywhROI.xy.x, roi.xywhROI.roiWidth));
-                Rpp32u y1 = static_cast<Rpp32u>(RPPPRANGECHECK(anchorBoxInfo[count].lt.y, roi.xywhROI.xy.y, roi.xywhROI.roiHeight));
-                Rpp32u x2 = static_cast<Rpp32u>(RPPPRANGECHECK(anchorBoxInfo[count].rb.x, x1, roi.xywhROI.roiWidth));
-                Rpp32u y2 = static_cast<Rpp32u>(RPPPRANGECHECK(anchorBoxInfo[count].rb.y, y1, roi.xywhROI.roiHeight));
-
-                Rpp32u pixelLocation = (y1 * dstDescPtr->strides.hStride) + (x1 * dstDescPtr->strides.wStride);
-                Rpp32u boxHeight = y2 - y1 + 1;
-                Rpp32u boxWidth = x2 - x1 + 1;
-
-                T *dstPtrTempR, *dstPtrTempG, *dstPtrTempB;
-                dstPtrTempR = dstPtrImage + pixelLocation;
-                dstPtrTempG = dstPtrTempR + dstDescPtr->strides.cStride;
-                dstPtrTempB = dstPtrTempG + dstDescPtr->strides.cStride;
-                for (int i = 0; i < boxHeight; i++)
+                Rpp32u noiseRowOffset = ((y1 + i + batchCount) % 255) * 255 * 3;
+                for (int j = 0; j < boxWidth; j++)
                 {
-                    Rpp32u noiseRowOffset = ((y1 + i + batchCount) % 255) * 255 * 3;
-                    for (int j = 0; j < boxWidth; j++)
-                    {
-                        Rpp32u noiseIdx = noiseRowOffset + ((x1 + j) % 255 * 3);
+                    Rpp32u noiseIdx = noiseRowOffset + ((x1 + j) % 255 * 3);
                         
-                        dstPtrTempR[j] = noiseBuffer[noiseIdx]; 
-                        dstPtrTempG[j] = noiseBuffer[noiseIdx + 1]; 
-                        dstPtrTempB[j] = noiseBuffer[noiseIdx + 2];
-                    }
-                    dstPtrTempR += dstDescPtr->strides.hStride;
-                    dstPtrTempG += dstDescPtr->strides.hStride;
-                    dstPtrTempB += dstDescPtr->strides.hStride;
+                    dstPtrTempR[j] = noiseBuffer[noiseIdx]; 
+                    dstPtrTempG[j] = noiseBuffer[noiseIdx + 1]; 
+                    dstPtrTempB[j] = noiseBuffer[noiseIdx + 2];
                 }
+                dstPtrTempR += dstDescPtr->strides.hStride;
+                dstPtrTempG += dstDescPtr->strides.hStride;
+                dstPtrTempB += dstDescPtr->strides.hStride;
             }
         }
+    
         // Erase with fused output-layout toggle (NCHW -> NHWC)
         else if ((srcDescPtr->c == 3) && (srcDescPtr->layout == RpptLayout::NCHW) && (dstDescPtr->layout == RpptLayout::NHWC))
         {
@@ -152,33 +147,30 @@ RppStatus random_erase_host_tensor(T *srcPtr,
                 dstPtrRow += dstDescPtr->strides.hStride;
             }
 
-            for(int count = 0; count < numBoxes; count++)
+            Rpp32u x1 = static_cast<Rpp32u>(RPPPRANGECHECK(anchorBoxInfo.lt.x, roi.xywhROI.xy.x, roi.xywhROI.roiWidth));
+            Rpp32u y1 = static_cast<Rpp32u>(RPPPRANGECHECK(anchorBoxInfo.lt.y, roi.xywhROI.xy.y, roi.xywhROI.roiHeight));
+            Rpp32u x2 = static_cast<Rpp32u>(RPPPRANGECHECK(anchorBoxInfo.rb.x, x1, roi.xywhROI.roiWidth));
+            Rpp32u y2 = static_cast<Rpp32u>(RPPPRANGECHECK(anchorBoxInfo.rb.y, y1, roi.xywhROI.roiHeight));
+
+            Rpp32u pixelLocation = (y1 * dstDescPtr->strides.hStride) + (x1 * dstDescPtr->strides.wStride);
+            Rpp32u boxHeight = y2 - y1 + 1;
+            Rpp32u boxWidth = x2 - x1 + 1;
+            T *dstPtrTemp;
+            dstPtrTemp = dstPtrImage + pixelLocation;
+
+            for (int i = 0; i < boxHeight; i++)
             {
-                Rpp32u x1 = static_cast<Rpp32u>(RPPPRANGECHECK(anchorBoxInfo[count].lt.x, roi.xywhROI.xy.x, roi.xywhROI.roiWidth));
-                Rpp32u y1 = static_cast<Rpp32u>(RPPPRANGECHECK(anchorBoxInfo[count].lt.y, roi.xywhROI.xy.y, roi.xywhROI.roiHeight));
-                Rpp32u x2 = static_cast<Rpp32u>(RPPPRANGECHECK(anchorBoxInfo[count].rb.x, x1, roi.xywhROI.roiWidth));
-                Rpp32u y2 = static_cast<Rpp32u>(RPPPRANGECHECK(anchorBoxInfo[count].rb.y, y1, roi.xywhROI.roiHeight));
-
-                Rpp32u pixelLocation = (y1 * dstDescPtr->strides.hStride) + (x1 * dstDescPtr->strides.wStride);
-                Rpp32u boxHeight = y2 - y1 + 1;
-                Rpp32u boxWidth = x2 - x1 + 1;
-                T *dstPtrTemp;
-                dstPtrTemp = dstPtrImage + pixelLocation;
-
-                for (int i = 0; i < boxHeight; i++)
+                Rpp32u noiseRowOffset = ((y1 + i + batchCount) % RANDOM_ERASE_NOISE_BUFFER_SIDE) * RANDOM_ERASE_NOISE_BUFFER_SIDE;
+                T *dstPtrRow = dstPtrTemp;
+                for (int j = 0; j < boxWidth; j++)
                 {
-                    Rpp32u noiseRowOffset = ((y1 + i + batchCount) % RANDOM_ERASE_NOISE_BUFFER_SIDE) * RANDOM_ERASE_NOISE_BUFFER_SIDE;
-                    T *dstPtrRow = dstPtrTemp;
-                    for (int j = 0; j < boxWidth; j++)
-                    {
-                        Rpp32u noiseIdx = (noiseRowOffset + ((x1 + j) % RANDOM_ERASE_NOISE_BUFFER_SIDE)) * 3;
-                        dstPtrRow[0] = noiseBuffer[noiseIdx];     // R
-                        dstPtrRow[1] = noiseBuffer[noiseIdx + 1]; // G
-                        dstPtrRow[2] = noiseBuffer[noiseIdx + 2]; // B
-                        dstPtrRow += dstDescPtr->c;
-                    }
-                    dstPtrTemp += dstDescPtr->strides.hStride;
+                    Rpp32u noiseIdx = (noiseRowOffset + ((x1 + j) % RANDOM_ERASE_NOISE_BUFFER_SIDE)) * 3;
+                    dstPtrRow[0] = noiseBuffer[noiseIdx];     // R
+                    dstPtrRow[1] = noiseBuffer[noiseIdx + 1]; // G
+                    dstPtrRow[2] = noiseBuffer[noiseIdx + 2]; // B
+                    dstPtrRow += dstDescPtr->c;
                 }
+                dstPtrTemp += dstDescPtr->strides.hStride;
             }
         }
         // Erase without fused output-layout toggle 3 channel(NCHW -> NCHW)
@@ -202,35 +194,32 @@ RppStatus random_erase_host_tensor(T *srcPtr,
                 dstPtrChannel += dstDescPtr->strides.cStride;
             }
 
-            for(int count = 0; count < numBoxes; count++)
+            Rpp32u x1 = static_cast<Rpp32u>(RPPPRANGECHECK(anchorBoxInfo.lt.x, roi.xywhROI.xy.x, roi.xywhROI.roiWidth));
+            Rpp32u y1 = static_cast<Rpp32u>(RPPPRANGECHECK(anchorBoxInfo.lt.y, roi.xywhROI.xy.y, roi.xywhROI.roiHeight));
+            Rpp32u x2 = static_cast<Rpp32u>(RPPPRANGECHECK(anchorBoxInfo.rb.x, x1, roi.xywhROI.roiWidth));
+            Rpp32u y2 = static_cast<Rpp32u>(RPPPRANGECHECK(anchorBoxInfo.rb.y, y1, roi.xywhROI.roiHeight));
+
+            Rpp32u pixelLocation = (y1 * srcDescPtr->strides.hStride) + (x1 * srcDescPtr->strides.wStride);
+            Rpp32u boxHeight = y2 - y1 + 1;
+            Rpp32u boxWidth = x2 - x1 + 1;
+
+            T *dstPtrTempR, *dstPtrTempG, *dstPtrTempB;
+            dstPtrTempR = dstPtrImage + pixelLocation;
+            dstPtrTempG = dstPtrTempR + dstDescPtr->strides.cStride;
+            dstPtrTempB = dstPtrTempG + dstDescPtr->strides.cStride;
+            for (int i = 0; i < boxHeight; i++)
             {
-                Rpp32u x1 = static_cast<Rpp32u>(RPPPRANGECHECK(anchorBoxInfo[count].lt.x, roi.xywhROI.xy.x, roi.xywhROI.roiWidth));
-                Rpp32u y1 = static_cast<Rpp32u>(RPPPRANGECHECK(anchorBoxInfo[count].lt.y, roi.xywhROI.xy.y, roi.xywhROI.roiHeight));
-                Rpp32u x2 = static_cast<Rpp32u>(RPPPRANGECHECK(anchorBoxInfo[count].rb.x, x1, roi.xywhROI.roiWidth));
-                Rpp32u y2 = static_cast<Rpp32u>(RPPPRANGECHECK(anchorBoxInfo[count].rb.y, y1, roi.xywhROI.roiHeight));
-
-                Rpp32u pixelLocation = (y1 * srcDescPtr->strides.hStride) + (x1 * srcDescPtr->strides.wStride);
-                Rpp32u boxHeight = y2 - y1 + 1;
-                Rpp32u boxWidth = x2 - x1 + 1;
-
-                T *dstPtrTempR, *dstPtrTempG, *dstPtrTempB;
-                dstPtrTempR = dstPtrImage + pixelLocation;
-                dstPtrTempG = dstPtrTempR + dstDescPtr->strides.cStride;
-                dstPtrTempB = dstPtrTempG + dstDescPtr->strides.cStride;
-                for (int i = 0; i < boxHeight; i++)
+                Rpp32u noiseRowOffset = ((y1 + i + batchCount) % RANDOM_ERASE_NOISE_BUFFER_SIDE) * RANDOM_ERASE_NOISE_BUFFER_SIDE * 3;  
+                for (int j = 0; j < boxWidth; j++)
                 {
-                    Rpp32u noiseRowOffset = ((y1 + i + batchCount) % RANDOM_ERASE_NOISE_BUFFER_SIDE) * RANDOM_ERASE_NOISE_BUFFER_SIDE * 3;  
-                    for (int j = 0; j < boxWidth; j++)
-                    {
-                        Rpp32u noiseIdx = noiseRowOffset + ((x1 + j) % RANDOM_ERASE_NOISE_BUFFER_SIDE * 3);
-                        dstPtrTempR[j] = noiseBuffer[noiseIdx];
-                        dstPtrTempG[j] = noiseBuffer[noiseIdx + 1];
-                        dstPtrTempB[j] = noiseBuffer[noiseIdx + 2];
-                    }
-                    dstPtrTempR += dstDescPtr->strides.hStride;
-                    dstPtrTempG += dstDescPtr->strides.hStride;
-                    dstPtrTempB += dstDescPtr->strides.hStride;
+                    Rpp32u noiseIdx = noiseRowOffset + ((x1 + j) % RANDOM_ERASE_NOISE_BUFFER_SIDE * 3);
+                    dstPtrTempR[j] = noiseBuffer[noiseIdx];
+                    dstPtrTempG[j] = noiseBuffer[noiseIdx + 1];
+                    dstPtrTempB[j] = noiseBuffer[noiseIdx + 2];
                 }
+                dstPtrTempR += dstDescPtr->strides.hStride;
+                dstPtrTempG += dstDescPtr->strides.hStride;
+                dstPtrTempB += dstDescPtr->strides.hStride;
             }
         }
         // Erase without fused output-layout toggle 1 channel(NCHW -> NCHW)
@@ -244,28 +233,25 @@ RppStatus random_erase_host_tensor(T *srcPtr,
                 dstPtrChannel += dstDescPtr->strides.hStride;
             }
 
-            for (int count = 0; count < numBoxes; count++)
+            Rpp32u x1 = (Rpp32u)RPPPRANGECHECK(anchorBoxInfo.lt.x, roi.xywhROI.xy.x, roi.xywhROI.roiWidth);
+            Rpp32u y1 = (Rpp32u)RPPPRANGECHECK(anchorBoxInfo.lt.y, roi.xywhROI.xy.y, roi.xywhROI.roiHeight);
+            Rpp32u x2 = (Rpp32u)RPPPRANGECHECK(anchorBoxInfo.rb.x, x1, roi.xywhROI.roiWidth);
+            Rpp32u y2 = (Rpp32u)RPPPRANGECHECK(anchorBoxInfo.rb.y, y1, roi.xywhROI.roiHeight);
+
+            Rpp32u pixelLocation = (y1 * srcDescPtr->strides.hStride) + (x1 * srcDescPtr->strides.wStride);
+            Rpp32u boxHeight = y2 - y1 + 1;
+            Rpp32u boxWidth = x2 - x1 + 1;
+
+            T *dstPtrTemp = dstPtrImage + pixelLocation;
+            for (int i = 0; i < boxHeight; i++)
             {
-                Rpp32u x1 = (Rpp32u)RPPPRANGECHECK(anchorBoxInfo[count].lt.x, roi.xywhROI.xy.x, roi.xywhROI.roiWidth);
-                Rpp32u y1 = (Rpp32u)RPPPRANGECHECK(anchorBoxInfo[count].lt.y, roi.xywhROI.xy.y, roi.xywhROI.roiHeight);
-                Rpp32u x2 = (Rpp32u)RPPPRANGECHECK(anchorBoxInfo[count].rb.x, x1, roi.xywhROI.roiWidth);
-                Rpp32u y2 = (Rpp32u)RPPPRANGECHECK(anchorBoxInfo[count].rb.y, y1, roi.xywhROI.roiHeight);
-
-                Rpp32u pixelLocation = (y1 * srcDescPtr->strides.hStride) + (x1 * srcDescPtr->strides.wStride);
-                Rpp32u boxHeight = y2 - y1 + 1;
-                Rpp32u boxWidth = x2 - x1 + 1;
-
-                T *dstPtrTemp = dstPtrImage + pixelLocation;
-                for (int i = 0; i < boxHeight; i++)
+                Rpp32u noiseRowOffset = ((y1 + i + batchCount) % RANDOM_ERASE_NOISE_BUFFER_SIDE) * RANDOM_ERASE_NOISE_BUFFER_SIDE;
+                for (int j = 0; j < boxWidth; j++)
                 {
-                    Rpp32u noiseRowOffset = ((y1 + i + batchCount) % RANDOM_ERASE_NOISE_BUFFER_SIDE) * RANDOM_ERASE_NOISE_BUFFER_SIDE;
-                    for (int j = 0; j < boxWidth; j++)
-                    {
-                        Rpp32u noiseIdx = noiseRowOffset + ((x1 + j) % RANDOM_ERASE_NOISE_BUFFER_SIDE);
-                        dstPtrTemp[j] = noiseBuffer[noiseIdx];
-                    }
-                    dstPtrTemp += dstDescPtr->strides.hStride;
+                    Rpp32u noiseIdx = noiseRowOffset + ((x1 + j) % RANDOM_ERASE_NOISE_BUFFER_SIDE);
+                    dstPtrTemp[j] = noiseBuffer[noiseIdx];
                 }
+                dstPtrTemp += dstDescPtr->strides.hStride;
             }
         }
         // Erase without fused output-layout toggle 3 channel(NHWC -> NHWC)
@@ -279,34 +265,31 @@ RppStatus random_erase_host_tensor(T *srcPtr,
                 dstPtrChannel += dstDescPtr->strides.hStride;
             }
 
-            for(int count = 0; count < numBoxes; count++)
+            Rpp32u x1 = static_cast<Rpp32u>(RPPPRANGECHECK(anchorBoxInfo.lt.x, roi.xywhROI.xy.x, roi.xywhROI.roiWidth));
+            Rpp32u y1 = static_cast<Rpp32u>(RPPPRANGECHECK(anchorBoxInfo.lt.y, roi.xywhROI.xy.y, roi.xywhROI.roiHeight));
+            Rpp32u x2 = static_cast<Rpp32u>(RPPPRANGECHECK(anchorBoxInfo.rb.x, x1, roi.xywhROI.roiWidth));
+            Rpp32u y2 = static_cast<Rpp32u>(RPPPRANGECHECK(anchorBoxInfo.rb.y, y1, roi.xywhROI.roiHeight));
+
+            Rpp32u pixelLocation = (y1 * srcDescPtr->strides.hStride) + (x1 * srcDescPtr->strides.wStride);
+            Rpp32u boxHeight = y2 - y1 + 1;
+            Rpp32u boxWidth = x2 - x1 + 1;
+            T *dstPtrTemp;
+            dstPtrTemp = dstPtrImage + pixelLocation;
+
+            for (int i = 0; i < boxHeight; i++)
             {
-                Rpp32u x1 = static_cast<Rpp32u>(RPPPRANGECHECK(anchorBoxInfo[count].lt.x, roi.xywhROI.xy.x, roi.xywhROI.roiWidth));
-                Rpp32u y1 = static_cast<Rpp32u>(RPPPRANGECHECK(anchorBoxInfo[count].lt.y, roi.xywhROI.xy.y, roi.xywhROI.roiHeight));
-                Rpp32u x2 = static_cast<Rpp32u>(RPPPRANGECHECK(anchorBoxInfo[count].rb.x, x1, roi.xywhROI.roiWidth));
-                Rpp32u y2 = static_cast<Rpp32u>(RPPPRANGECHECK(anchorBoxInfo[count].rb.y, y1, roi.xywhROI.roiHeight));
-
-                Rpp32u pixelLocation = (y1 * srcDescPtr->strides.hStride) + (x1 * srcDescPtr->strides.wStride);
-                Rpp32u boxHeight = y2 - y1 + 1;
-                Rpp32u boxWidth = x2 - x1 + 1;
-                T *dstPtrTemp;
-                dstPtrTemp = dstPtrImage + pixelLocation;
-
-                for (int i = 0; i < boxHeight; i++)
+                Rpp32u noiseRowOffset = ((y1 + i + batchCount) % RANDOM_ERASE_NOISE_BUFFER_SIDE) * RANDOM_ERASE_NOISE_BUFFER_SIDE * 3;
+                T *dstPtrRow = dstPtrTemp;
+                for (int j = 0; j < boxWidth; j++)
                 {
-                    Rpp32u noiseRowOffset = ((y1 + i + batchCount) % RANDOM_ERASE_NOISE_BUFFER_SIDE) * RANDOM_ERASE_NOISE_BUFFER_SIDE * 3;
-                    T *dstPtrRow = dstPtrTemp;
-                    for (int j = 0; j < boxWidth; j++)
-                    {
-                        Rpp32u noiseXIdx = ((x1 + j) % RANDOM_ERASE_NOISE_BUFFER_SIDE) * 3;
-                        Rpp32u noiseIdx = noiseRowOffset + noiseXIdx;
-                        dstPtrRow[0] = noiseBuffer[noiseIdx];     // R
-                        dstPtrRow[1] = noiseBuffer[noiseIdx + 1]; // G
-                        dstPtrRow[2] = noiseBuffer[noiseIdx + 2]; // B
-                        dstPtrRow += dstDescPtr->c;
-                    }
-                    dstPtrTemp += dstDescPtr->strides.hStride;
+                    Rpp32u noiseXIdx = ((x1 + j) % RANDOM_ERASE_NOISE_BUFFER_SIDE) * 3;
+                    Rpp32u noiseIdx = noiseRowOffset + noiseXIdx;
+                    dstPtrRow[0] = noiseBuffer[noiseIdx];     // R
+                    dstPtrRow[1] = noiseBuffer[noiseIdx + 1]; // G
+                    dstPtrRow[2] = noiseBuffer[noiseIdx + 2]; // B
+                    dstPtrRow += dstDescPtr->c;
                 }
+                dstPtrTemp += dstDescPtr->strides.hStride;
             }
         }
     }
@@ -319,7 +302,6 @@ template RppStatus random_erase_host_tensor<Rpp8u>(Rpp8u*,
                                                    Rpp8u*,
                                                    RpptDescPtr,
                                                    RpptRoiLtrb*,
-                                                   Rpp32u*,
                                                    Rpp8u*,
                                                    RpptROIPtr,
                                                    RpptRoiType,
@@ -331,7 +313,6 @@ template RppStatus random_erase_host_tensor<Rpp16f>(Rpp16f*,
                                                     Rpp16f*,
                                                     RpptDescPtr,
                                                     RpptRoiLtrb*,
-                                                    Rpp32u*,
                                                     Rpp16f*,
                                                     RpptROIPtr,
                                                     RpptRoiType,
@@ -343,7 +324,6 @@ template RppStatus random_erase_host_tensor<Rpp32f>(Rpp32f*,
                                                     Rpp32f*,
                                                     RpptDescPtr,
                                                     RpptRoiLtrb*,
-                                                    Rpp32u*,
                                                     Rpp32f*,
                                                     RpptROIPtr,
                                                     RpptRoiType,
@@ -355,7 +335,6 @@ template RppStatus random_erase_host_tensor<Rpp8s>(Rpp8s*,
                                                    Rpp8s*,
                                                    RpptDescPtr,
                                                    RpptRoiLtrb*,
-                                                   Rpp32u*,
                                                    Rpp8s*,
                                                    RpptROIPtr,
                                                    RpptRoiType,
