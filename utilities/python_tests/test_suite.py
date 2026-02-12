@@ -105,11 +105,12 @@ class TestConfig:
 class UnifiedTestSuite:
     """Unified test suite with combined Unit/QA/Performance testing"""
     
-    def __init__(self, backend, mode="ALL", case_list=None):
+    def __init__(self, backend, mode="ALL", case_list=None, preserve_output=0):
         self.backend = backend
         self.backend_name = "HIP" if backend == HIP else "HOST"
         self.mode = mode.upper()  # UNIT, QA, PERF, or ALL
         self.case_list = case_list  # List of case numbers to run (None = all)
+        self.preserve_output = preserve_output  # 0=delete previous, 1=preserve
         self.config = TestConfig()
         self.results = {
             'unit': [],
@@ -131,6 +132,10 @@ class UnifiedTestSuite:
             46: ('vignette', self.test_vignette)
         }
         
+        # Clean up previous output folders if preserve_output=0
+        if self.mode in ["UNIT", "ALL"] and self.preserve_output == 0:
+            self._cleanup_previous_outputs()
+        
         # Setup directories
         if self.mode in ["UNIT", "ALL"]:
             self.unit_output_dir = self.config.get_output_dir(self.backend_name, "UNIT")
@@ -151,6 +156,27 @@ class UnifiedTestSuite:
     # =========================================================================
     # HELPER FUNCTIONS
     # =========================================================================
+    
+    def _cleanup_previous_outputs(self):
+        """Delete previous output folders for current backend"""
+        import shutil
+        import glob
+        
+        # Pattern to match output directories for this backend
+        pattern = f"{self.backend_name}_OUTPUT_UNIT_*"
+        
+        # Find and delete matching directories
+        deleted_count = 0
+        for dir_path in glob.glob(pattern):
+            if os.path.isdir(dir_path):
+                try:
+                    shutil.rmtree(dir_path)
+                    deleted_count += 1
+                except Exception as e:
+                    print(f"Warning: Could not delete {dir_path}: {e}")
+        
+        if deleted_count > 0:
+            print(f"Cleaned up {deleted_count} previous output folder(s)")
     
     def _save_output_image(self, tensor, augmentation_name, image_name, img_idx):
         """Save output image to filesystem (Unit mode)"""
@@ -1587,7 +1613,13 @@ Examples:
     parser.add_argument('--case_list',
                        type=str,
                        default=None,
+                       nargs='+',
                        help='Comma-separated list of test cases to run (numbers 0-9 or names). If not specified, all cases run.')
+    parser.add_argument('--preserve_output',
+                       type=int,
+                       choices=[0, 1],
+                       default=0,
+                       help='Preserve previous output folders. 0=delete previous outputs (default), 1=preserve all outputs')
     
     args = parser.parse_args()
     
@@ -1621,7 +1653,7 @@ Examples:
         supportedCaseList = list(case_map.values())
         
         case_list = set()
-        case_items = args.case_list.split(',')
+        case_items = args.case_list
         
         for item in case_items:
             item = item.strip()
@@ -1665,7 +1697,7 @@ Examples:
     
     # Run tests
     try:
-        test_suite = UnifiedTestSuite(backend, args.mode, case_list)
+        test_suite = UnifiedTestSuite(backend, args.mode, case_list, args.preserve_output)
         success = test_suite.run_all()
         return 0 if success else 1
         
