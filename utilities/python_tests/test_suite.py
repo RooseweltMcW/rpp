@@ -105,15 +105,30 @@ class TestConfig:
 class UnifiedTestSuite:
     """Unified test suite with combined Unit/QA/Performance testing"""
     
-    def __init__(self, backend, mode="ALL"):
+    def __init__(self, backend, mode="ALL", case_list=None):
         self.backend = backend
         self.backend_name = "HIP" if backend == HIP else "HOST"
         self.mode = mode.upper()  # UNIT, QA, PERF, or ALL
+        self.case_list = case_list  # List of case numbers to run (None = all)
         self.config = TestConfig()
         self.results = {
             'unit': [],
             'qa': [],
             'perf': []
+        }
+        
+        # Case number to test function mapping
+        self.case_to_test_map = {
+            0: ('brightness', self.test_brightness),
+            1: ('gamma_correction', self.test_gamma_correction),
+            4: ('contrast', self.test_contrast),
+            5: ('pixelate', self.test_pixelate),
+            20: ('flip', self.test_flip),
+            21: ('resize', self.test_resize),
+            23: ('rotate', self.test_rotate),
+            37: ('crop', self.test_crop),
+            42: ('hue', self.test_hue),
+            46: ('vignette', self.test_vignette)
         }
         
         # Setup directories
@@ -1327,63 +1342,66 @@ class UnifiedTestSuite:
     # TEST RUNNERS
     # =========================================================================
     
+    def _get_filtered_tests(self):
+        """Get test functions based on case_list filter"""
+        if self.case_list is None:
+            # Run all tests in order
+            return [
+                (0, 'brightness', self.test_brightness),
+                (1, 'gamma_correction', self.test_gamma_correction),
+                (20, 'flip', self.test_flip),
+                (21, 'resize', self.test_resize),
+                (37, 'crop', self.test_crop),
+                (42, 'hue', self.test_hue),
+                (23, 'rotate', self.test_rotate),
+                (4, 'contrast', self.test_contrast),
+                (46, 'vignette', self.test_vignette),
+                (5, 'pixelate', self.test_pixelate)
+            ]
+        else:
+            # Filter tests based on selected cases
+            filtered = []
+            for case_num in self.case_list:
+                if case_num in self.case_to_test_map:
+                    name, test_func = self.case_to_test_map[case_num]
+                    filtered.append((case_num, name, test_func))
+            return filtered
+    
     def run_unit_tests(self):
-        """Run all augmentations in Unit mode"""
+        """Run augmentations in Unit mode"""
         print(f"\n{'='*70}")
         print(f"UNIT TESTS - Image Generation ({self.backend_name})")
         print(f"{'='*70}\n")
         
-        tests = [
-            self.test_brightness,
-            self.test_gamma_correction,
-            self.test_flip,
-            self.test_resize,
-            self.test_crop,
-            self.test_hue,
-            self.test_rotate,
-            self.test_contrast,
-            self.test_vignette,
-            self.test_pixelate
-        ]
+        tests = self._get_filtered_tests()
         
-        for test in tests:
+        for case_num, name, test_func in tests:
             try:
-                test()
+                test_func()
                 print("-" * 70)
             except Exception as e:
-                print(f"ERROR in {test.__name__}: {e}")
+                print(f"ERROR in {test_func.__name__}: {e}")
                 print("-" * 70)
     
     def run_qa_tests(self):
-        """Run all augmentations in QA mode"""
+        """Run augmentations in QA mode"""
         print(f"\n{'='*70}")
         print(f"QA TESTS - Reference Comparison ({self.backend_name})")
         print(f"{'='*70}")
         print(f"Tolerance: ±{self.config.TOLERANCE} pixel values\n")
         
-        tests = [
-            self.test_brightness,
-            self.test_gamma_correction,
-            self.test_flip,
-            self.test_resize,
-            self.test_crop,
-            self.test_hue,
-            self.test_rotate,
-            self.test_contrast,
-            self.test_vignette,
-            self.test_pixelate
-        ]
+        tests = self._get_filtered_tests()
         
-        for test in tests:
+        for case_num, name, test_func in tests:
             try:
-                test()
+                test_func()
                 print("-" * 70)
             except Exception as e:
-                print(f"ERROR in {test.__name__}: {e}")
+                print(f"ERROR in {test_func.__name__}: {e}")
                 print("-" * 70)
     
     def run_performance_tests(self):
-        """Run performance tests - timing measurements for all augmentations"""
+        """Run performance tests - timing measurements for augmentations"""
         print(f"\n{'='*70}")
         print(f"PERFORMANCE TESTS ({self.backend_name})")
         print(f"{'='*70}\n")
@@ -1398,29 +1416,39 @@ class UnifiedTestSuite:
         # Get parameters from config
         params = self.config.AUGMENTATION_PARAMS
         
-        perf_tests = [
-            ('brightness', lambda: fn.brightness(test_image, alpha=params['brightness']['alpha'], 
+        # Map case numbers to performance test functions
+        perf_test_map = {
+            0: ('brightness', lambda: fn.brightness(test_image, alpha=params['brightness']['alpha'], 
                                                 beta=params['brightness']['beta'], backend=self.backend)),
-            ('gamma_correction', lambda: fn.gamma_correction(test_image, gamma=params['gamma_correction']['gamma'], 
+            1: ('gamma_correction', lambda: fn.gamma_correction(test_image, gamma=params['gamma_correction']['gamma'], 
                                                             backend=self.backend)),
-            ('flip', lambda: fn.flip(test_image, horizontal=params['flip']['horizontal'], 
+            20: ('flip', lambda: fn.flip(test_image, horizontal=params['flip']['horizontal'], 
                                    vertical=params['flip']['vertical'], backend=self.backend)),
-            ('resize', lambda: fn.resize(test_image, width=params['resize']['width'], 
+            21: ('resize', lambda: fn.resize(test_image, width=params['resize']['width'], 
                                         height=params['resize']['height'], backend=self.backend)),
-            ('crop', lambda: fn.crop(test_image, x1=params['crop']['x1'], y1=params['crop']['y1'], 
+            37: ('crop', lambda: fn.crop(test_image, x1=params['crop']['x1'], y1=params['crop']['y1'], 
                                     crop_width=params['crop']['crop_width'], 
                                     crop_height=params['crop']['crop_height'], backend=self.backend)),
-            ('hue', lambda: fn.hue(test_image, hue_shift=params['hue']['hue_shift'], backend=self.backend)),
-            ('rotate', lambda: fn.rotate(test_image, angle=params['rotate']['angle'], backend=self.backend)),
-            ('contrast', lambda: fn.contrast(test_image, contrast_factor=params['contrast']['contrast_factor'], 
+            42: ('hue', lambda: fn.hue(test_image, hue_shift=params['hue']['hue_shift'], backend=self.backend)),
+            23: ('rotate', lambda: fn.rotate(test_image, angle=params['rotate']['angle'], backend=self.backend)),
+            4: ('contrast', lambda: fn.contrast(test_image, contrast_factor=params['contrast']['contrast_factor'], 
                                             contrast_center=params['contrast']['contrast_center'], backend=self.backend)),
-            ('vignette', lambda: fn.vignette(test_image, intensity=params['vignette']['intensity'], backend=self.backend)),
-            ('pixelate', lambda: fn.pixelate(test_image, pixelation_percentage=params['pixelate']['pixelation_percentage'], 
+            46: ('vignette', lambda: fn.vignette(test_image, intensity=params['vignette']['intensity'], backend=self.backend)),
+            5: ('pixelate', lambda: fn.pixelate(test_image, pixelation_percentage=params['pixelate']['pixelation_percentage'], 
                                             backend=self.backend))
-        ]
+        }
         
-        for i, (func_name, func_call) in enumerate(perf_tests, 1):
-            print(f"  [{i}/10] Testing {func_name}...", end=" ")
+        # Filter based on selected cases
+        if self.case_list is None:
+            # Run all tests
+            perf_tests = [(k, v[0], v[1]) for k, v in perf_test_map.items()]
+        else:
+            # Run only selected tests
+            perf_tests = [(k, perf_test_map[k][0], perf_test_map[k][1]) 
+                         for k in self.case_list if k in perf_test_map]
+        
+        for i, (case_num, func_name, func_call) in enumerate(perf_tests, 1):
+            print(f"  [Case {case_num}] Testing {func_name}...", end=" ")
             
             # Check if function is available
             if not hasattr(fn, func_name):
@@ -1536,6 +1564,15 @@ Examples:
   
   # Run all tests
   python test_suite.py --mode ALL --backend HOST
+  
+  # Run specific cases by number
+  python test_suite.py --mode QA --backend HOST --cases 0,1,2
+  
+  # Run specific cases by name
+  python test_suite.py --mode UNIT --backend HOST --cases brightness,gamma_correction,flip
+  
+  # Mix numbers and names
+  python test_suite.py --mode ALL --backend HIP --cases 0,brightness,2,flip
         """
     )
     
@@ -1547,6 +1584,10 @@ Examples:
                        choices=['HOST', 'HIP'],
                        required=True, 
                        help='Backend to test')
+    parser.add_argument('--case_list',
+                       type=str,
+                       default=None,
+                       help='Comma-separated list of test cases to run (numbers 0-9 or names). If not specified, all cases run.')
     
     args = parser.parse_args()
     
@@ -1559,6 +1600,53 @@ Examples:
         print(f"ERROR: HIP backend requested but GPU not available")
         return 1
     
+    # Parse cases argument
+    case_list = None
+    if args.case_list:
+        # Case name to index mapping
+        case_map = {
+            'brightness': 0,
+            'gamma_correction': 1,
+            'contrast': 4,
+            'pixelate': 5,
+            'flip': 20,
+            'resize': 21,
+            'rotate': 23,
+            'crop': 37,
+            'hue': 42,
+            'vignette': 46
+        }
+        
+        # Supported case list based on case_map values
+        supportedCaseList = list(case_map.values())
+        
+        case_list = set()
+        case_items = args.case_list.split(',')
+        
+        for item in case_items:
+            item = item.strip()
+            # Try to parse as number
+            if item.isdigit():
+                case_num = int(item)
+                if case_num in supportedCaseList:
+                    case_list.add(case_num)
+                else:
+                    print(f"WARNING: Case number {case_num} not supported (valid: {sorted(supportedCaseList)}), ignoring")
+            # Try to parse as name
+            elif item in case_map:
+                case_list.add(case_map[item])
+            else:
+                print(f"WARNING: Unknown case '{item}', ignoring")
+        
+        if not case_list:
+            print("ERROR: No valid cases specified")
+            return 1
+        
+        case_list = sorted(list(case_list))
+        
+        # Create reverse mapping for display (case number -> name)
+        reverse_case_map = {v: k for k, v in case_map.items()}
+    
     # Print header
     print("\n" + "="*70)
     print("RPP TEST SUITE - COMPLETE VERSION")
@@ -1566,11 +1654,18 @@ Examples:
     print(f"Mode: {args.mode}")
     print(f"Backend: {backend_name}")
     print(f"GPU Available: {is_gpu_available()}")
+    if case_list:
+        # Use reverse_case_map to get proper case name display
+        reverse_case_map = {v: k for k, v in case_map.items()}
+        selected_names = [f"{i}:{reverse_case_map[i]}" for i in case_list]
+        print(f"Selected Cases: {', '.join(selected_names)}")
+    else:
+        print(f"Selected Cases: All")
     print("="*70)
     
     # Run tests
     try:
-        test_suite = UnifiedTestSuite(backend, args.mode)
+        test_suite = UnifiedTestSuite(backend, args.mode, case_list)
         success = test_suite.run_all()
         return 0 if success else 1
         
