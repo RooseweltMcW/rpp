@@ -105,7 +105,7 @@ class TestConfig:
     
     def get_output_dir(self, backend_name, mode):
         """Get output directory based on backend and mode"""
-        return f"{backend_name}_OUTPUT_{mode}_{self.timestamp}"
+        return f"OUTPUT_IMAGES_{backend_name}_{self.timestamp}"
 
 
 # =============================================================================
@@ -173,7 +173,7 @@ class UnifiedTestSuite:
         import glob
         
         # Pattern to match output directories for this backend
-        pattern = f"{self.backend_name}_OUTPUT_UNIT_*"
+        pattern = f"OUTPUT_IMAGES_{self.backend_name}_*"
         
         # Find and delete matching directories
         deleted_count = 0
