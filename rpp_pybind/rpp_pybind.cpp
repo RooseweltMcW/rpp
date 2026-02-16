@@ -87,9 +87,6 @@ TensorData get_tensor_data(const torch::Tensor& tensor) {
         throw std::runtime_error("Unsupported tensor dtype");
     }
     
-    // Determine layout based on tensor shape (assuming NCHW by default)
-    data.layout = RpptLayout::NCHW;
-    
     // Get shape and strides
     for (int i = 0; i < tensor.dim(); i++) {
         data.shape.push_back(tensor.size(i));
@@ -106,26 +103,52 @@ TensorData get_tensor_data(const torch::Tensor& tensor) {
     return data;
 }
 
+RpptLayout detect_layout_from_tensor(const torch::Tensor& tensor) {
+    // Detect layout based on tensor shape
+    // PKD3 (Packed) = NHWC -> last dim is channels (3 for RGB, 1 for grayscale)
+    // PLN3 (Planar) = NCHW -> 2nd dim is channels
+    if (tensor.dim() == 4) {
+        if (tensor.size(3) == 3 || tensor.size(3) == 1) {
+            // Last dim is channels -> NHWC (PKD3/PKD1)
+            return RpptLayout::NHWC;
+        } else if (tensor.size(1) == 3 || tensor.size(1) == 1) {
+            // Second dim is channels -> NCHW (PLN3/PLN1)
+            return RpptLayout::NCHW;
+        }
+    }
+    // Default to NCHW
+    return RpptLayout::NCHW;
+}
+
 void setup_tensor_descriptor(RpptDesc& desc, const TensorData& data) {
     desc.dataType = data.dtype;
     desc.layout = data.layout;
     desc.numDims = data.shape.size();
     desc.offsetInBytes = 0;
     
-    if (desc.numDims == 4) {
+    size_t element_size = (data.dtype == RpptDataType::U8 || data.dtype == RpptDataType::I8) ? 1 :
+                          (data.dtype == RpptDataType::F16) ? 2 : 4;
+    
+    if (desc.layout == RpptLayout::NCHW) {
         desc.n = data.shape[0];
         desc.c = data.shape[1]; 
         desc.h = data.shape[2];
         desc.w = data.shape[3];
-        
-        // Calculate strides in bytes
-        size_t element_size = (data.dtype == RpptDataType::U8 || data.dtype == RpptDataType::I8) ? 1 :
-                            (data.dtype == RpptDataType::F16) ? 2 : 4;
-        
         desc.strides.nStride = data.strides[0] * element_size;
         desc.strides.cStride = data.strides[1] * element_size;
         desc.strides.hStride = data.strides[2] * element_size;
         desc.strides.wStride = data.strides[3] * element_size;
+    } 
+    else if (desc.layout == RpptLayout::NHWC) {
+        desc.n = data.shape[0];
+        desc.h = data.shape[1];
+        desc.w = data.shape[2];
+        desc.c = data.shape[3];
+            
+        desc.strides.nStride = data.strides[0] * element_size;
+        desc.strides.hStride = data.strides[1] * element_size;
+        desc.strides.wStride = data.strides[2] * element_size;
+        desc.strides.cStride = data.strides[3] * element_size;
     }
 }
 
@@ -145,6 +168,10 @@ void brightness(const torch::Tensor& input_tensor,
 
     auto input_data = get_tensor_data(input_tensor);
     auto output_data = get_tensor_data(output_tensor);
+    
+    // Detect layouts from tensor shapes
+    input_data.layout = detect_layout_from_tensor(input_tensor);
+    output_data.layout = detect_layout_from_tensor(output_tensor);
     
     RpptDesc src_desc, dst_desc;
     setup_tensor_descriptor(src_desc, input_data);
@@ -218,6 +245,10 @@ void gamma_correction(const torch::Tensor& input_tensor,
     auto input_data = get_tensor_data(input_tensor);
     auto output_data = get_tensor_data(output_tensor);
     
+    // Detect layouts from tensor shapes
+    input_data.layout = detect_layout_from_tensor(input_tensor);
+    output_data.layout = detect_layout_from_tensor(output_tensor);
+    
     RpptDesc src_desc, dst_desc;
     setup_tensor_descriptor(src_desc, input_data);
     setup_tensor_descriptor(dst_desc, output_data);
@@ -278,6 +309,10 @@ void contrast(const torch::Tensor& input_tensor,
              int backend) {
     auto input_data = get_tensor_data(input_tensor);
     auto output_data = get_tensor_data(output_tensor);
+    
+    // Detect layouts from tensor shapes
+    input_data.layout = detect_layout_from_tensor(input_tensor);
+    output_data.layout = detect_layout_from_tensor(output_tensor);
     
     RpptDesc src_desc, dst_desc;
     setup_tensor_descriptor(src_desc, input_data);
@@ -346,6 +381,10 @@ void hue(const torch::Tensor& input_tensor,
     auto input_data = get_tensor_data(input_tensor);
     auto output_data = get_tensor_data(output_tensor);
     
+    // Detect layouts from tensor shapes
+    input_data.layout = detect_layout_from_tensor(input_tensor);
+    output_data.layout = detect_layout_from_tensor(output_tensor);
+    
     RpptDesc src_desc, dst_desc;
     setup_tensor_descriptor(src_desc, input_data);
     setup_tensor_descriptor(dst_desc, output_data);
@@ -405,6 +444,10 @@ void flip(const torch::Tensor& input_tensor,
          int backend) {
     auto input_data = get_tensor_data(input_tensor);
     auto output_data = get_tensor_data(output_tensor);
+    
+    // Detect layouts from tensor shapes
+    input_data.layout = detect_layout_from_tensor(input_tensor);
+    output_data.layout = detect_layout_from_tensor(output_tensor);
     
     RpptDesc src_desc, dst_desc;
     setup_tensor_descriptor(src_desc, input_data);
@@ -478,6 +521,10 @@ void resize(const torch::Tensor& input_tensor,
     auto input_data = get_tensor_data(input_tensor);
     auto output_data = get_tensor_data(output_tensor);
     
+    // Detect layouts from tensor shapes
+    input_data.layout = detect_layout_from_tensor(input_tensor);
+    output_data.layout = detect_layout_from_tensor(output_tensor);
+    
     RpptDesc src_desc, dst_desc;
     setup_tensor_descriptor(src_desc, input_data);
     setup_tensor_descriptor(dst_desc, output_data);
@@ -542,6 +589,10 @@ void rotate(const torch::Tensor& input_tensor,
     auto input_data = get_tensor_data(input_tensor);
     auto output_data = get_tensor_data(output_tensor);
     
+    // Detect layouts from tensor shapes
+    input_data.layout = detect_layout_from_tensor(input_tensor);
+    output_data.layout = detect_layout_from_tensor(output_tensor);
+    
     RpptDesc src_desc, dst_desc;
     setup_tensor_descriptor(src_desc, input_data);
     setup_tensor_descriptor(dst_desc, output_data);
@@ -603,6 +654,10 @@ void crop(const torch::Tensor& input_tensor,
     auto input_data = get_tensor_data(input_tensor);
     auto output_data = get_tensor_data(output_tensor);
     
+    // Detect layouts from tensor shapes
+    input_data.layout = detect_layout_from_tensor(input_tensor);
+    output_data.layout = detect_layout_from_tensor(output_tensor);
+    
     RpptDesc src_desc, dst_desc;
     setup_tensor_descriptor(src_desc, input_data);
     setup_tensor_descriptor(dst_desc, output_data);
@@ -656,6 +711,10 @@ void vignette(const torch::Tensor& input_tensor,
              int backend) {
     auto input_data = get_tensor_data(input_tensor);
     auto output_data = get_tensor_data(output_tensor);
+    
+    // Detect layouts from tensor shapes
+    input_data.layout = detect_layout_from_tensor(input_tensor);
+    output_data.layout = detect_layout_from_tensor(output_tensor);
     
     RpptDesc src_desc, dst_desc;
     setup_tensor_descriptor(src_desc, input_data);
@@ -717,6 +776,10 @@ void pixelate(const torch::Tensor& input_tensor,
     auto input_data = get_tensor_data(input_tensor);
     auto output_data = get_tensor_data(output_tensor);
     auto scratch_data = get_tensor_data(scratch_tensor);
+    
+    // Detect layouts from tensor shapes
+    input_data.layout = detect_layout_from_tensor(input_tensor);
+    output_data.layout = detect_layout_from_tensor(output_tensor);
     
     RpptDesc src_desc, dst_desc;
     setup_tensor_descriptor(src_desc, input_data);

@@ -13,6 +13,8 @@ Similar to rocAL's fn.py pattern.
 # Simple imports - like rocAL
 import rpp_pybind
 from rpp_pybind.amd.rpp.rpp_types import get_default_backend, HOST, HIP
+from rpp_pybind.amd.rpp.rpp_types import RpptLayout
+from rpp_pybind.amd.rpp.layout_utils import convert_nchw_to_nhwc, convert_nhwc_to_nchw, get_layout_name
 import ctypes
 import torch
 
@@ -63,17 +65,19 @@ def _prepare_tensor_and_backend(tensor, backend):
 # Wrapper functions - 10 augmentations from different groups
 
 # Color Augmentations (4)
-def brightness(images, alpha=1.0, beta=0.0, roi_widths=None, roi_heights=None, backend=None):
+def brightness(images, alpha=1.0, beta=0.0, roi_widths=None, roi_heights=None, input_layout=None, output_layout=None, backend=None):
     """
-    Adjust image brightness.
+    Adjust image brightness - Auto-detects layout from tensor shape
     
     Args:
-        images: Input tensor (B, C, H, W) - PyTorch tensor
-        alpha: Brightness multiplier (default 1.0)
-        beta: Brightness offset (default 0.0)
-        roi_widths: List of actual image widths (None = use full tensor width)
-        roi_heights: List of actual image heights (None = use full tensor height)
-        backend: RppBackend (None = auto-detect)
+        images: Input tensor
+        alpha: Brightness multiplier
+        beta: Brightness offset  
+        roi_widths: List of actual image widths
+        roi_heights: List of actual image heights
+        input_layout: Ignored - auto-detected from tensor
+        output_layout: Ignored - auto-detected from tensor
+        backend: RppBackend
     
     Returns:
         Augmented images tensor
@@ -83,31 +87,30 @@ def brightness(images, alpha=1.0, beta=0.0, roi_widths=None, roi_heights=None, b
     if backend is None:
         backend = get_default_backend()
 
-    # Convert backend to integer
     backend_int = backend.value if hasattr(backend, 'value') else int(backend)
     
-    # Ensure tensor is contiguous and on correct device  
     if not images.is_contiguous():
         images = images.contiguous()
     
     if images.dtype != torch.uint8:
         images = (images.clamp(0, 255)).to(torch.uint8)
     
-    # Move to correct device
     if backend == HIP and not images.is_cuda:
         images = images.cuda()
     elif backend == HOST and images.is_cuda:
         images = images.cpu()
 
-    batch_size = images.shape[0]
+    # Create output with same shape - C++ auto-detects layouts
     output = torch.zeros_like(images).contiguous()
+
+    batch_size = images.shape[0]
     
-    # Set ROI dimensions (use full tensor dimensions if not provided)
+    # Set ROI dimensions
     if roi_widths is None:
-        roi_widths = [images.shape[3]] * batch_size
+        roi_widths = [images.shape[3] if images.shape[1] <= 3 else images.shape[2]] * batch_size
     if roi_heights is None:
-        roi_heights = [images.shape[2]] * batch_size
-    
+        roi_heights = [images.shape[2] if images.shape[1] <= 3 else images.shape[1]] * batch_size
+ 
     handle = rppCreate(batch_size, backend_int)
 
     alpha_array = [alpha] * batch_size
@@ -120,19 +123,9 @@ def brightness(images, alpha=1.0, beta=0.0, roi_widths=None, roi_heights=None, b
     return output
 
 
-def gamma_correction(images, gamma=1.0, roi_widths=None, roi_heights=None, backend=None):
+def gamma_correction(images, gamma=1.0, roi_widths=None, roi_heights=None, input_layout=None, output_layout=None, backend=None):
     """
-    Apply gamma correction.
-    
-    Args:
-        images: Input tensor (B, C, H, W)
-        gamma: Gamma value (default 1.0)
-        roi_widths: List of actual image widths (None = use full tensor width)
-        roi_heights: List of actual image heights (None = use full tensor height)
-        backend: RppBackend (None = auto-detect)
-    
-    Returns:
-        Gamma-corrected images
+    Apply gamma correction - Auto-detects layout from tensor shape
     """
     import torch
     
@@ -142,7 +135,7 @@ def gamma_correction(images, gamma=1.0, roi_widths=None, roi_heights=None, backe
     backend_int = backend.value if hasattr(backend, 'value') else int(backend)
 
     if images.dtype != torch.uint8:
-        images = images.clamp(0, 255).to(torch.uint8)  # Convert F32/F16 → U8
+        images = images.clamp(0, 255).to(torch.uint8)
     
     if not images.is_contiguous():
         images = images.contiguous()
@@ -155,18 +148,15 @@ def gamma_correction(images, gamma=1.0, roi_widths=None, roi_heights=None, backe
     batch_size = images.shape[0]
     output = torch.zeros_like(images).contiguous()
 
-    # Set ROI dimensions (use full tensor dimensions if not provided)
+    # Set ROI dimensions
     if roi_widths is None:
-        roi_widths = [images.shape[3]] * batch_size
+        roi_widths = [images.shape[3] if images.shape[1] <= 3 else images.shape[2]] * batch_size
     if roi_heights is None:
-        roi_heights = [images.shape[2]] * batch_size
+        roi_heights = [images.shape[2] if images.shape[1] <= 3 else images.shape[1]] * batch_size
 
     handle = rppCreate(batch_size, backend_int)
-
     gamma_array = [gamma] * batch_size
-    
     _gamma_correction(images, output, gamma_array, roi_widths, roi_heights, handle, backend_int)
-
     rppDestroy(handle, backend_int)
     
     return output
@@ -177,20 +167,9 @@ def gamma_correction(images, gamma=1.0, roi_widths=None, roi_heights=None, backe
 #     'gamma_correction'
 # ]
 
-def contrast(images, contrast_factor=1.0, contrast_center=128.0, roi_widths=None, roi_heights=None, backend=None):
+def contrast(images, contrast_factor=1.0, contrast_center=128.0, roi_widths=None, roi_heights=None, input_layout=None, output_layout=None, backend=None):
     """
-    Adjust image contrast.
-    
-    Args:
-        images: Input tensor (B, C, H, W)
-        contrast_factor: Contrast factor
-        contrast_center: Center value for contrast
-        roi_widths: List of actual image widths (None = use full tensor width)
-        roi_heights: List of actual image heights (None = use full tensor height)
-        backend: RppBackend (None = auto-detect)
-    
-    Returns:
-        Contrast-adjusted images
+    Adjust image contrast - Auto-detects layout from tensor shape
     """
     import torch
     
@@ -200,7 +179,7 @@ def contrast(images, contrast_factor=1.0, contrast_center=128.0, roi_widths=None
     backend_int = backend.value if hasattr(backend, 'value') else int(backend)
 
     if images.dtype != torch.uint8:
-        images = images.clamp(0, 255).to(torch.uint8)  # Convert F32/F16 → U8
+        images = images.clamp(0, 255).to(torch.uint8)
     
     if not images.is_contiguous():
         images = images.contiguous()
@@ -211,13 +190,13 @@ def contrast(images, contrast_factor=1.0, contrast_center=128.0, roi_widths=None
         images = images.cpu()
     
     batch_size = images.shape[0]
-    output = torch.empty_like(images)
+    output = torch.empty_like(images).contiguous()
     
-    # Set ROI dimensions (use full tensor dimensions if not provided)
+    # Set ROI dimensions
     if roi_widths is None:
-        roi_widths = [images.shape[3]] * batch_size
+        roi_widths = [images.shape[3] if images.shape[1] <= 3 else images.shape[2]] * batch_size
     if roi_heights is None:
-        roi_heights = [images.shape[2]] * batch_size
+        roi_heights = [images.shape[2] if images.shape[1] <= 3 else images.shape[1]] * batch_size
     
     handle = rppCreate(batch_size, backend_int)
     
@@ -231,19 +210,9 @@ def contrast(images, contrast_factor=1.0, contrast_center=128.0, roi_widths=None
     return output
 
 
-def hue(images, hue_shift=0.0, roi_widths=None, roi_heights=None, backend=None):
+def hue(images, hue_shift=0.0, roi_widths=None, roi_heights=None, input_layout=None, output_layout=None, backend=None):
     """
-    Adjust image hue (for RGB images only).
-    
-    Args:
-        images: Input tensor (B, 3, H, W) - RGB images only
-        hue_shift: Hue shift in degrees (0-359)
-        roi_widths: List of actual image widths (None = use full tensor width)
-        roi_heights: List of actual image heights (None = use full tensor height)
-        backend: RppBackend (None = auto-detect)
-    
-    Returns:
-        Hue-adjusted images
+    Adjust image hue - Auto-detects layout from tensor shape
     """
     import torch
     
@@ -253,7 +222,7 @@ def hue(images, hue_shift=0.0, roi_widths=None, roi_heights=None, backend=None):
     backend_int = backend.value if hasattr(backend, 'value') else int(backend)
 
     if images.dtype != torch.uint8:
-        images = images.clamp(0, 255).to(torch.uint8)  # Convert F32/F16 → U8
+        images = images.clamp(0, 255).to(torch.uint8)
     
     if not images.is_contiguous():
         images = images.contiguous()
@@ -263,44 +232,27 @@ def hue(images, hue_shift=0.0, roi_widths=None, roi_heights=None, backend=None):
     elif backend == HOST and images.is_cuda:
         images = images.cpu()
     
-    if images.shape[1] != 3:
-        raise ValueError("Hue adjustment requires RGB images (3 channels)")
-    
     batch_size = images.shape[0]
-    output = torch.empty_like(images)
+    output = torch.empty_like(images).contiguous()
     
-    # Set ROI dimensions (use full tensor dimensions if not provided)
+    # Set ROI dimensions
     if roi_widths is None:
-        roi_widths = [images.shape[3]] * batch_size
+        roi_widths = [images.shape[3] if images.shape[1] <= 3 else images.shape[2]] * batch_size
     if roi_heights is None:
-        roi_heights = [images.shape[2]] * batch_size
+        roi_heights = [images.shape[2] if images.shape[1] <= 3 else images.shape[1]] * batch_size
     
     handle = rppCreate(batch_size, backend_int)
-    
     hue_shift_array = [hue_shift] * batch_size
-    
     _hue(images, output, hue_shift_array, roi_widths, roi_heights, handle, backend_int)
-    
     rppDestroy(handle, backend_int)
     
     return output
 
 
 # Geometric Augmentations (4)
-def flip(images, horizontal=False, vertical=False, roi_widths=None, roi_heights=None, backend=None):
+def flip(images, horizontal=False, vertical=False, roi_widths=None, roi_heights=None, input_layout=None, output_layout=None, backend=None):
     """
-    Flip images horizontally and/or vertically.
-    
-    Args:
-        images: Input tensor (B, C, H, W)
-        horizontal: Flip horizontally (bool or list)
-        vertical: Flip vertically (bool or list)
-        roi_widths: List of actual image widths (None = use full tensor width)
-        roi_heights: List of actual image heights (None = use full tensor height)
-        backend: RppBackend (None = auto-detect)
-    
-    Returns:
-        Flipped images tensor
+    Flip images - Auto-detects layout from tensor shape
     """
     import torch
     
@@ -310,7 +262,7 @@ def flip(images, horizontal=False, vertical=False, roi_widths=None, roi_heights=
     backend_int = backend.value if hasattr(backend, 'value') else int(backend)
 
     if images.dtype != torch.uint8:
-        images = images.clamp(0, 255).to(torch.uint8)  # Convert F32/F16 → U8
+        images = images.clamp(0, 255).to(torch.uint8)
     
     if not images.is_contiguous():
         images = images.contiguous()
@@ -321,43 +273,31 @@ def flip(images, horizontal=False, vertical=False, roi_widths=None, roi_heights=
         images = images.cpu()
     
     batch_size = images.shape[0]
-    output = torch.empty_like(images)
+    output = torch.empty_like(images).contiguous()
     
-    # Set ROI dimensions (use full tensor dimensions if not provided)
+    # Set ROI dimensions
     if roi_widths is None:
-        roi_widths = [images.shape[3]] * batch_size
+        roi_widths = [images.shape[3] if images.shape[1] <= 3 else images.shape[2]] * batch_size
     if roi_heights is None:
-        roi_heights = [images.shape[2]] * batch_size
+        roi_heights = [images.shape[2] if images.shape[1] <= 3 else images.shape[1]] * batch_size
     
     handle = rppCreate(batch_size, backend_int)
     
-    # Convert bool to list if needed
+    # Convert bool to list
     if isinstance(horizontal, bool):
         horizontal = [int(horizontal)] * batch_size
     if isinstance(vertical, bool):
         vertical = [int(vertical)] * batch_size
     
     _flip(images, output, horizontal, vertical, roi_widths, roi_heights, handle, backend_int)
-    
     rppDestroy(handle, backend_int)
     
     return output
 
 
-def resize(images, width, height, roi_widths=None, roi_heights=None, backend=None):
+def resize(images, width, height, roi_widths=None, roi_heights=None, input_layout=None, output_layout=None, backend=None):
     """
-    Resize images.
-    
-    Args:
-        images: Input tensor (B, C, H, W)
-        width: Target width
-        height: Target height
-        roi_widths: List of actual image widths (None = use full tensor width)
-        roi_heights: List of actual image heights (None = use full tensor height)
-        backend: RppBackend (None = auto-detect)
-    
-    Returns:
-        Resized images tensor
+    Resize images - Creates output with resize dimensions
     """
     import torch
     
@@ -367,7 +307,7 @@ def resize(images, width, height, roi_widths=None, roi_heights=None, backend=Non
     backend_int = backend.value if hasattr(backend, 'value') else int(backend)
 
     if images.dtype != torch.uint8:
-        images = images.clamp(0, 255).to(torch.uint8)  # Convert F32/F16 → U8
+        images = images.clamp(0, 255).to(torch.uint8)
     
     if not images.is_contiguous():
         images = images.contiguous()
@@ -378,17 +318,13 @@ def resize(images, width, height, roi_widths=None, roi_heights=None, backend=Non
         images = images.cpu()
     
     batch_size = images.shape[0]
-    channels = images.shape[1]
-    device = images.device
+    output = torch.empty_like(images).contiguous()
     
-    output = torch.empty(batch_size, channels, height, width, 
-                        dtype=images.dtype, device=device)
-    
-    # Set ROI dimensions (use full tensor dimensions if not provided)
+    # Set ROI dimensions
     if roi_widths is None:
-        roi_widths = [images.shape[3]] * batch_size
+        roi_widths = [images.shape[3] if images.shape[1] <= 3 else images.shape[2]] * batch_size
     if roi_heights is None:
-        roi_heights = [images.shape[2]] * batch_size
+        roi_heights = [images.shape[2] if images.shape[1] <= 3 else images.shape[1]] * batch_size
     
     handle = rppCreate(batch_size, backend_int)
     
@@ -396,25 +332,14 @@ def resize(images, width, height, roi_widths=None, roi_heights=None, backend=Non
     height_array = [height] * batch_size
     
     _resize(images, output, width_array, height_array, roi_widths, roi_heights, handle, backend_int)
-    
     rppDestroy(handle, backend_int)
     
     return output
 
 
-def rotate(images, angle=0.0, roi_widths=None, roi_heights=None, backend=None):
+def rotate(images, angle=0.0, roi_widths=None, roi_heights=None, input_layout=None, output_layout=None, backend=None):
     """
-    Rotate images by given angle.
-    
-    Args:
-        images: Input tensor (B, C, H, W)
-        angle: Rotation angle in degrees (positive = counter-clockwise)
-        roi_widths: List of actual image widths (None = use full tensor width)
-        roi_heights: List of actual image heights (None = use full tensor height)
-        backend: RppBackend (None = auto-detect)
-    
-    Returns:
-        Rotated images tensor
+    Rotate images - Auto-detects layout from tensor shape
     """
     import torch
     
@@ -424,7 +349,7 @@ def rotate(images, angle=0.0, roi_widths=None, roi_heights=None, backend=None):
     backend_int = backend.value if hasattr(backend, 'value') else int(backend)
 
     if images.dtype != torch.uint8:
-        images = images.clamp(0, 255).to(torch.uint8)  # Convert F32/F16 → U8
+        images = images.clamp(0, 255).to(torch.uint8)
     
     if not images.is_contiguous():
         images = images.contiguous()
@@ -435,13 +360,164 @@ def rotate(images, angle=0.0, roi_widths=None, roi_heights=None, backend=None):
         images = images.cpu()
     
     batch_size = images.shape[0]
-    output = torch.empty_like(images)
+    output = torch.empty_like(images).contiguous()
     
-    # Set ROI dimensions (use full tensor dimensions if not provided)
+    # Set ROI dimensions
     if roi_widths is None:
-        roi_widths = [images.shape[3]] * batch_size
+        roi_widths = [images.shape[3] if images.shape[1] <= 3 else images.shape[2]] * batch_size
     if roi_heights is None:
-        roi_heights = [images.shape[2]] * batch_size
+        roi_heights = [images.shape[2] if images.shape[1] <= 3 else images.shape[1]] * batch_size
+    
+    handle = rppCreate(batch_size, backend_int)
+    angle_array = [angle] * batch_size
+    _rotate(images, output, angle_array, roi_widths, roi_heights, handle, backend_int)
+    rppDestroy(handle, backend_int)
+    
+    return output
+
+
+def crop(images, x1, y1, crop_width, crop_height, roi_widths=None, roi_heights=None, input_layout=None, output_layout=None, backend=None):
+    """
+    Crop images - Creates output with crop dimensions, C++ auto-detects layouts
+    """
+    import torch
+    
+    if backend is None:
+        backend = get_default_backend()
+    
+    backend_int = backend.value if hasattr(backend, 'value') else int(backend)
+
+    if images.dtype != torch.uint8:
+        images = images.clamp(0, 255).to(torch.uint8)
+    
+    if not images.is_contiguous():
+        images = images.contiguous()
+        
+    if backend == HIP and not images.is_cuda:
+        images = images.cuda()
+    elif backend == HOST and images.is_cuda:
+        images = images.cpu()
+    
+    batch_size = images.shape[0]
+    device = images.device
+    
+    # Detect layout from input shape
+    is_nchw = (images.shape[1] <= 3)
+    channels = images.shape[1] if is_nchw else images.shape[3]
+    
+    # Create output maintaining same layout as input
+    if is_nchw:
+        output = torch.empty(batch_size, channels, crop_height, crop_width, dtype=images.dtype, device=device)
+    else:
+        output = torch.empty(batch_size, crop_height, crop_width, channels, dtype=images.dtype, device=device)
+    
+    handle = rppCreate(batch_size, backend_int)
+    
+    # Convert scalars to lists
+    x1_array = [x1] * batch_size if isinstance(x1, (int, float)) else x1
+    y1_array = [y1] * batch_size if isinstance(y1, (int, float)) else y1
+    width_array = [crop_width] * batch_size if isinstance(crop_width, (int, float)) else crop_width
+    height_array = [crop_height] * batch_size if isinstance(crop_height, (int, float)) else crop_height
+    
+    _crop(images, output, x1_array, y1_array, width_array, height_array, handle, backend_int)
+    rppDestroy(handle, backend_int)
+    
+    return output
+
+
+# Effects Augmentations (2)
+def vignette(images, intensity=0.5, roi_widths=None, roi_heights=None, input_layout=None, output_layout=None, backend=None):
+    """
+    Apply vignette effect - Auto-detects layout from tensor shape
+    """
+    import torch
+    
+    if backend is None:
+        backend = get_default_backend()
+    
+    backend_int = backend.value if hasattr(backend, 'value') else int(backend)
+
+    if images.dtype != torch.uint8:
+        images = images.clamp(0, 255).to(torch.uint8)
+    
+    if not images.is_contiguous():
+        images = images.contiguous()
+        
+    if backend == HIP and not images.is_cuda:
+        images = images.cuda()
+    elif backend == HOST and images.is_cuda:
+        images = images.cpu()
+    
+    batch_size = images.shape[0]
+    output = torch.empty_like(images).contiguous()
+    
+    # Set ROI dimensions
+    if roi_widths is None:
+        roi_widths = [images.shape[3] if images.shape[1] <= 3 else images.shape[2]] * batch_size
+    if roi_heights is None:
+        roi_heights = [images.shape[2] if images.shape[1] <= 3 else images.shape[1]] * batch_size
+    
+    handle = rppCreate(batch_size, backend_int)
+    intensity_array = [intensity] * batch_size
+    _vignette(images, output, intensity_array, roi_widths, roi_heights, handle, backend_int)
+    rppDestroy(handle, backend_int)
+    
+    return output
+
+
+def pixelate(images, pixelation_percentage=50.0, roi_widths=None, roi_heights=None, input_layout=None, output_layout=None, backend=None):
+    """
+    Apply pixelate effect - Auto-detects layout from tensor shape
+    """
+    import torch
+    
+    if backend is None:
+        backend = get_default_backend()
+    
+    backend_int = backend.value if hasattr(backend, 'value') else int(backend)
+
+    if images.dtype != torch.uint8:
+        images = images.clamp(0, 255).to(torch.uint8)
+    
+    if not images.is_contiguous():
+        images = images.contiguous()
+        
+    if backend is None:
+        backend = get_default_backend()
+    
+    backend_int = backend.value if hasattr(backend, 'value') else int(backend)
+
+    if images.dtype != torch.uint8:
+        images = images.clamp(0, 255).to(torch.uint8)
+    
+    if not images.is_contiguous():
+        images = images.contiguous()
+        
+    if backend == HIP and not images.is_cuda:
+        images = images.cuda()
+    elif backend == HOST and images.is_cuda:
+        images = images.cpu()
+    
+    batch_size = images.shape[0]
+    
+    # Create output tensor based on layout
+    if input_layout == output_layout:
+        output = torch.empty_like(images)
+    else:
+        if input_layout == 'NCHW' and output_layout == 'NHWC':
+            b, c, h, w = images.shape
+            output = torch.zeros(b, h, w, c, dtype=images.dtype, device=images.device)
+        elif input_layout == 'NHWC' and output_layout == 'NCHW':
+            b, h, w, c = images.shape
+            output = torch.zeros(b, c, h, w, dtype=images.dtype, device=images.device)
+        else:
+            output = torch.empty_like(images)
+    
+    # Set ROI dimensions
+    if roi_widths is None:
+        roi_widths = [images.shape[3] if input_layout == 'NCHW' else images.shape[2]] * batch_size
+    if roi_heights is None:
+        roi_heights = [images.shape[2] if input_layout == 'NCHW' else images.shape[1]] * batch_size
     
     handle = rppCreate(batch_size, backend_int)
     
@@ -454,20 +530,24 @@ def rotate(images, angle=0.0, roi_widths=None, roi_heights=None, backend=None):
     return output
 
 
-def crop(images, x1, y1, crop_width, crop_height, backend=None):
+def crop(images, x1, y1, crop_width, crop_height, roi_widths=None, roi_heights=None, input_layout=None, output_layout=None, backend=None):
     """
     Crop images to specified region.
     
     Args:
-        images: Input tensor (B, C, H, W)
+        images: Input tensor
         x1: Top-left x coordinate
         y1: Top-left y coordinate  
         crop_width: Width of crop region
         crop_height: Height of crop region
-        backend: RppBackend (None = auto-detect)
+        roi_widths: Ignored (for compatibility)
+        roi_heights: Ignored (for compatibility)
+        input_layout: 'NCHW' or 'NHWC'
+        output_layout: 'NCHW' or 'NHWC'
+        backend: RppBackend
     
     Returns:
-        Cropped images tensor
+        Cropped images
     """
     import torch
     
@@ -477,7 +557,7 @@ def crop(images, x1, y1, crop_width, crop_height, backend=None):
     backend_int = backend.value if hasattr(backend, 'value') else int(backend)
 
     if images.dtype != torch.uint8:
-        images = images.clamp(0, 255).to(torch.uint8)  # Convert F32/F16 → U8
+        images = images.clamp(0, 255).to(torch.uint8)
     
     if not images.is_contiguous():
         images = images.contiguous()
@@ -488,11 +568,19 @@ def crop(images, x1, y1, crop_width, crop_height, backend=None):
         images = images.cpu()
     
     batch_size = images.shape[0]
-    channels = images.shape[1]
     device = images.device
     
-    output = torch.empty(batch_size, channels, crop_height, crop_width,
-                        dtype=images.dtype, device=device)
+    # Determine channels based on input layout
+    if input_layout == 'NCHW':
+        channels = images.shape[1]
+    else:  # NHWC
+        channels = images.shape[3]
+    
+    # Create output with correct shape based on output layout
+    if output_layout == 'NCHW':
+        output = torch.empty(batch_size, channels, crop_height, crop_width, dtype=images.dtype, device=device)
+    else:  # NHWC
+        output = torch.empty(batch_size, crop_height, crop_width, channels, dtype=images.dtype, device=device)
     
     handle = rppCreate(batch_size, backend=backend)
     
@@ -510,16 +598,18 @@ def crop(images, x1, y1, crop_width, crop_height, backend=None):
 
 
 # Effects Augmentations (2)
-def vignette(images, intensity=0.5, roi_widths=None, roi_heights=None, backend=None):
+def vignette(images, intensity=0.5, roi_widths=None, roi_heights=None, input_layout=None, output_layout=None, backend=None):
     """
     Apply vignette effect to images.
     
     Args:
-        images: Input tensor (B, C, H, W)
+        images: Input tensor
         intensity: Vignette intensity (0.0 to 1.0)
-        roi_widths: List of actual image widths (None = use full tensor width)
-        roi_heights: List of actual image heights (None = use full tensor height)
-        backend: RppBackend (None = auto-detect)
+        roi_widths: List of image widths
+        roi_heights: List of image heights
+        input_layout: 'NCHW' or 'NHWC'
+        output_layout: 'NCHW' or 'NHWC'
+        backend: RppBackend
     
     Returns:
         Images with vignette effect
@@ -532,7 +622,7 @@ def vignette(images, intensity=0.5, roi_widths=None, roi_heights=None, backend=N
     backend_int = backend.value if hasattr(backend, 'value') else int(backend)
 
     if images.dtype != torch.uint8:
-        images = images.clamp(0, 255).to(torch.uint8)  # Convert F32/F16 → U8
+        images = images.clamp(0, 255).to(torch.uint8)
     
     if not images.is_contiguous():
         images = images.contiguous()
@@ -543,13 +633,25 @@ def vignette(images, intensity=0.5, roi_widths=None, roi_heights=None, backend=N
         images = images.cpu()
     
     batch_size = images.shape[0]
-    output = torch.empty_like(images)
     
-    # Set ROI dimensions (use full tensor dimensions if not provided)
+    # Create output tensor based on layout
+    if input_layout == output_layout:
+        output = torch.empty_like(images)
+    else:
+        if input_layout == 'NCHW' and output_layout == 'NHWC':
+            b, c, h, w = images.shape
+            output = torch.zeros(b, h, w, c, dtype=images.dtype, device=images.device)
+        elif input_layout == 'NHWC' and output_layout == 'NCHW':
+            b, h, w, c = images.shape
+            output = torch.zeros(b, c, h, w, dtype=images.dtype, device=images.device)
+        else:
+            output = torch.empty_like(images)
+    
+    # Set ROI dimensions
     if roi_widths is None:
-        roi_widths = [images.shape[3]] * batch_size
+        roi_widths = [images.shape[3] if input_layout == 'NCHW' else images.shape[2]] * batch_size
     if roi_heights is None:
-        roi_heights = [images.shape[2]] * batch_size
+        roi_heights = [images.shape[2] if input_layout == 'NCHW' else images.shape[1]] * batch_size
     
     handle = rppCreate(batch_size, backend_int)
     
@@ -562,16 +664,18 @@ def vignette(images, intensity=0.5, roi_widths=None, roi_heights=None, backend=N
     return output
 
 
-def pixelate(images, pixelation_percentage=50.0, roi_widths=None, roi_heights=None, backend=None):
+def pixelate(images, pixelation_percentage=50.0, roi_widths=None, roi_heights=None, input_layout=None, output_layout=None, backend=None):
     """
     Apply pixelate effect to images.
     
     Args:
-        images: Input tensor (B, C, H, W)
+        images: Input tensor
         pixelation_percentage: Pixelation level (0-100)
-        roi_widths: List of actual image widths (None = use full tensor width)
-        roi_heights: List of actual image heights (None = use full tensor height)
-        backend: RppBackend (None = auto-detect)
+        roi_widths: List of image widths
+        roi_heights: List of image heights
+        input_layout: 'NCHW' or 'NHWC'
+        output_layout: 'NCHW' or 'NHWC'
+        backend: RppBackend
     
     Returns:
         Pixelated images
@@ -584,7 +688,7 @@ def pixelate(images, pixelation_percentage=50.0, roi_widths=None, roi_heights=No
     backend_int = backend.value if hasattr(backend, 'value') else int(backend)
 
     if images.dtype != torch.uint8:
-        images = images.clamp(0, 255).to(torch.uint8)  # Convert F32/F16 → U8
+        images = images.clamp(0, 255).to(torch.uint8)
     
     if not images.is_contiguous():
         images = images.contiguous()
@@ -595,16 +699,31 @@ def pixelate(images, pixelation_percentage=50.0, roi_widths=None, roi_heights=No
         images = images.cpu()
     
     batch_size = images.shape[0]
-    output = torch.empty_like(images)
     
-    # Set ROI dimensions (use full tensor dimensions if not provided)
+    # Create output tensor based on layout
+    if input_layout == output_layout:
+        output = torch.empty_like(images)
+    else:
+        if input_layout == 'NCHW' and output_layout == 'NHWC':
+            b, c, h, w = images.shape
+            output = torch.zeros(b, h, w, c, dtype=images.dtype, device=images.device)
+        elif input_layout == 'NHWC' and output_layout == 'NCHW':
+            b, h, w, c = images.shape
+            output = torch.zeros(b, c, h, w, dtype=images.dtype, device=images.device)
+        else:
+            output = torch.empty_like(images)
+    
+    # Set ROI dimensions
     if roi_widths is None:
-        roi_widths = [images.shape[3]] * batch_size
+        roi_widths = [images.shape[3] if input_layout == 'NCHW' else images.shape[2]] * batch_size
     if roi_heights is None:
-        roi_heights = [images.shape[2]] * batch_size
+        roi_heights = [images.shape[2] if input_layout == 'NCHW' else images.shape[1]] * batch_size
     
     # Create scratch buffer
-    scratch_size = batch_size * images.shape[1] * images.shape[2] * images.shape[3]
+    if input_layout == 'NCHW':
+        scratch_size = batch_size * images.shape[1] * images.shape[2] * images.shape[3]
+    else:  # NHWC
+        scratch_size = batch_size * images.shape[1] * images.shape[2] * images.shape[3]
     scratch = torch.empty(scratch_size, dtype=torch.float32, device=images.device)
     
     handle = rppCreate(batch_size, backend_int)

@@ -71,21 +71,31 @@ class TestConfig:
             (150, 150)  # Image 2
         ]
         
+        # Layout variants to test
+        self.LAYOUT_VARIANTS = [
+            ('PKD3', 'PKD3'),  # NCHW → NCHW
+            ('PKD3', 'PLN3'),  # NCHW → NHWC
+            ('PLN3', 'PLN3'),  # NHWC → NHWC
+            ('PLN3', 'PKD3'),  # NHWC → NCHW
+            ('PLN1', 'PLN1'),  # NCHW → NCHW
+        ]
+
         # Reference batch dimensions
         self.BATCH_HEIGHT = 150
         self.BATCH_WIDTH = 152
         self.BATCH_SIZE = 3
         
         # Augmentation parameters (matching C++ test suite)
+        # NOTE: crop and resize dimensions are calculated per-image (not hardcoded)
         self.AUGMENTATION_PARAMS = {
             'brightness': {'alpha': 1.75, 'beta': 50.0},
             'gamma_correction': {'gamma': 1.9},
             'contrast': {'contrast_factor': 2.96, 'contrast_center': 128.0},
             'flip': {'horizontal': True, 'vertical': False},
-            'resize': {'width': 224, 'height': 224},
-            'crop': {'x1': 10, 'y1': 10, 'crop_width': 30, 'crop_height': 30},
+            'resize': {},  # Calculated per image (width/2, height/2)
+            'crop': {'x1': 10, 'y1': 10},  # crop_width and crop_height calculated per image
             'hue': {'hue_shift': 60.0},
-            'rotate': {'angle': 45.0},
+            'rotate': {'angle': 50.0},
             'vignette': {'intensity': 6.0},
             'pixelate': {'pixelation_percentage': 87.5}
         }
@@ -178,11 +188,16 @@ class UnifiedTestSuite:
         if deleted_count > 0:
             print(f"Cleaned up {deleted_count} previous output folder(s)")
     
-    def _save_output_image(self, tensor, augmentation_name, image_name, img_idx):
+    def _save_output_image(self, tensor, augmentation_name, image_name, img_idx, layout_variant=None):
         """Save output image to filesystem (Unit mode)"""
         try:
             # Create augmentation-specific directory
             aug_output_dir = os.path.join(self.unit_output_dir, augmentation_name)
+            
+            # If layout_variant is provided, create subdirectory for it
+            if layout_variant:
+                aug_output_dir = os.path.join(aug_output_dir, layout_variant)
+            
             os.makedirs(aug_output_dir, exist_ok=True)
             
             # Convert tensor to numpy
@@ -192,11 +207,27 @@ class UnifiedTestSuite:
                 tensor_np = np.array(tensor)
             
             # Handle different tensor formats
-            if len(tensor_np.shape) == 4:  # NCHW format
+            if len(tensor_np.shape) == 4:  # 4D tensor (B, C, H, W) or (B, H, W, C)
                 output_single = tensor_np[0]  # Extract first image
-                output_hwc = np.transpose(output_single, (1, 2, 0))  # CHW to HWC
-            elif len(tensor_np.shape) == 3 and tensor_np.shape[0] == 3:  # CHW format
-                output_hwc = np.transpose(tensor_np, (1, 2, 0))
+                
+                # Check if NCHW or NHWC by examining channel dimension
+                if output_single.shape[0] <= 3 and output_single.shape[0] >= 1:  # Likely NCHW (C, H, W)
+                    if output_single.shape[0] == 1:  # Grayscale (1, H, W)
+                        output_hwc = output_single[0]  # Extract to (H, W)
+                    else:  # RGB (3, H, W)
+                        output_hwc = np.transpose(output_single, (1, 2, 0))  # (H, W, 3)
+                else:  # Likely NHWC (H, W, C)
+                    output_hwc = output_single  # Already in HWC format
+                    
+            elif len(tensor_np.shape) == 3:
+                # Check if CHW or HWC
+                if tensor_np.shape[0] <= 3 and tensor_np.shape[0] >= 1:  # Likely CHW
+                    if tensor_np.shape[0] == 1:  # Grayscale (1, H, W)
+                        output_hwc = tensor_np[0]  # Extract to (H, W)
+                    else:  # RGB (3, H, W)
+                        output_hwc = np.transpose(tensor_np, (1, 2, 0))  # (H, W, 3)
+                else:  # Likely HWC already
+                    output_hwc = tensor_np
             else:
                 output_hwc = tensor_np
             
@@ -204,9 +235,15 @@ class UnifiedTestSuite:
             if output_hwc.dtype != np.uint8:
                 output_hwc = np.clip(output_hwc, 0, 255).astype(np.uint8)
             
-            # Get actual dimensions and crop before saving
-            actual_h, actual_w = self.config.IMAGE_SPECS[img_idx]
-            output_hwc = output_hwc[:actual_h, :actual_w, :]
+            # For resize and crop, the output dimensions may differ from input
+            # Don't crop the output - save the full tensor as-is
+            if augmentation_name not in ['resize', 'crop']:
+                # Get actual dimensions and crop before saving (for non-resize/crop augmentations)
+                actual_h, actual_w = self.config.IMAGE_SPECS[img_idx]
+                if len(output_hwc.shape) == 3:  # RGB
+                    output_hwc = output_hwc[:actual_h, :actual_w, :]
+                else:  # Grayscale
+                    output_hwc = output_hwc[:actual_h, :actual_w]
             
             # Save image
             output_path = os.path.join(aug_output_dir, image_name)
@@ -218,19 +255,19 @@ class UnifiedTestSuite:
             print(f"    ✗ Failed to save: {e}")
             return False
     
-    def _extract_from_batch_nhwc(self, batch_data, img_idx):
+    def _extract_from_batch_nhwc(self, batch_data, img_idx, extract_h=None, extract_w=None):
         """
         Extract individual image from NHWC batch reference data.
         
+        Args:
+            batch_data: Reference batch data
+            img_idx: Image index in batch
+            extract_h: Height to extract (None = use IMAGE_SPECS)
+            extract_w: Width to extract (None = use IMAGE_SPECS)
+        
         Batch structure (273,600 bytes total):
-        - First two images: each in 150×152×3 slots
-        - Third image: in remaining space (also 150×152×3)
-        
-        But stored with padding to 200 height for uniformity.
+        - Each image slot: 150×152×3
         """
-        # The batch has a complex layout
-        # Total: 273,600 bytes = 3 × 200 × 152 × 3
-        
         # Calculate offsets based on actual storage layout
         slot_height = 150  # Padded height for all slots
         slot_width = 152   # Common width
@@ -245,16 +282,55 @@ class UnifiedTestSuite:
         # Reshape to HWC
         img_slot_reshaped = img_slot.reshape(slot_height, slot_width, 3)
         
-        # Get actual dimensions and extract valid region
-        actual_h, actual_w = self.config.IMAGE_SPECS[img_idx]
+        # Get dimensions to extract
+        if extract_h is None or extract_w is None:
+            # Use actual image dimensions from IMAGE_SPECS
+            actual_h, actual_w = self.config.IMAGE_SPECS[img_idx]
+        else:
+            # Use provided dimensions (for resize/crop cases)
+            actual_h, actual_w = extract_h, extract_w
         
         # Extract only the valid region (top-left corner)
         ref_roi = img_slot_reshaped[:actual_h, :actual_w, :]
         
         return ref_roi
+    
+    def _extract_from_batch_pln1(self, batch_data, img_idx):
+        """
+        Extract individual grayscale image from PLN1 batch reference data.
+        
+        PLN1 structure: Grayscale images stored in NCHW format (C=1)
+        The PLN1 data starts after RGB data in the same file.
+        RGB data size: 150 × 152 × 3 × 3 (batch_size) = 205,200 bytes
+        Each PLN1 slot: 150 × 152 × 1 = 22,800 bytes
+        """
+        slot_height = 150
+        slot_width = 152
+        rgb_slot_size = slot_height * slot_width * 3  # RGB slot size
+        pln1_slot_size = slot_height * slot_width # PLN1 slot size (1 channel)
+        
+        # PLN1 data starts after all RGB data
+        pln1_offset_start = rgb_slot_size * 3  # 3 RGB images
+        
+        # Calculate the offset for the requested grayscale image
+        offset = pln1_offset_start + (img_idx * pln1_slot_size)
+        
+        # Extract the image slot
+        img_slot = batch_data[offset:offset + pln1_slot_size]
+        
+        # Reshape to HW
+        img_slot_reshaped = img_slot.reshape(slot_height, slot_width)
+        
+        # Get actual dimensions and extract valid region
+        actual_h, actual_w = self.config.IMAGE_SPECS[img_idx]
+        
+        # Extract only the valid region (top-left corner)
+        ref_roi = img_slot_reshaped[:actual_h, :actual_w]
+        
+        return ref_roi
 
     
-    def _compare_with_reference(self, output_tensor, ref_data, img_idx):
+    def _compare_with_reference(self, output_tensor, ref_data, img_idx, is_grayscale=False):
         """
         Compare output tensor with reference from batch.
         
@@ -268,37 +344,49 @@ class UnifiedTestSuite:
                 output_np = np.array(output_tensor)
             
             # Handle tensor format conversion
-            if len(output_np.shape) == 4:  # NCHW
-                output_single = output_np[0]
-                output_hwc = np.transpose(output_single, (1, 2, 0))
-            elif len(output_np.shape) == 3 and output_np.shape[0] == 3:  # CHW
-                output_hwc = np.transpose(output_np, (1, 2, 0))
+            if is_grayscale:
+                # Grayscale: NCHW (1, 1, H, W) -> (H, W)
+                if len(output_np.shape) == 4:
+                    output_hw = output_np[0, 0, :, :]  # Extract (H, W)
+                elif len(output_np.shape) == 3:
+                    output_hw = output_np[0, :, :]  # Extract (H, W)
+                else:
+                    output_hw = output_np
             else:
-                output_hwc = output_np
+                # RGB: Convert to HWC
+                if len(output_np.shape) == 4:  # NCHW or NHWC
+                    output_single = output_np[0]
+                    if output_single.shape[0] == 3:  # NCHW (C, H, W)
+                        output_hwc = np.transpose(output_single, (1, 2, 0))
+                    else:  # NHWC (H, W, C)
+                        output_hwc = output_single
+                elif len(output_np.shape) == 3 and output_np.shape[0] == 3:  # CHW
+                    output_hwc = np.transpose(output_np, (1, 2, 0))
+                else:
+                    output_hwc = output_np
             
             # Get actual dimensions for this image
             actual_h, actual_w = self.config.IMAGE_SPECS[img_idx]
             
             # Extract ROI from output (remove any padding)
-            output_roi = output_hwc[:actual_h, :actual_w, :]
-            
-            # Extract reference from batch
-            ref_roi = self._extract_from_batch_nhwc(ref_data, img_idx)
+            if is_grayscale:
+                output_roi = output_hw[:actual_h, :actual_w]
+                # Extract reference for grayscale
+                ref_roi = self._extract_from_batch_pln1(ref_data, img_idx)
+            else:
+                output_roi = output_hwc[:actual_h, :actual_w, :]
+                # Extract reference from batch
+                ref_roi = self._extract_from_batch_nhwc(ref_data, img_idx)
             
             # Verify shapes match
-            # print("Output ROI Shape: ",output_roi.shape)
-            # print("reference ROI Shape: ",ref_roi.shape)
             if output_roi.shape != ref_roi.shape:
                 return False, {
                     "error": f"Shape mismatch: output {output_roi.shape} vs ref {ref_roi.shape}"
                 }
-            print("Output values: ",output_roi.astype(np.int16))
-            print("Reference values: ",ref_roi.astype(np.int16))
 
             # Calculate differences
             diff = output_roi.astype(np.int16) - ref_roi.astype(np.int16)
             abs_diff = np.abs(diff)
-            # print(abs_diff)
             
             # Statistics
             max_diff = int(abs_diff.max())
@@ -315,1054 +403,466 @@ class UnifiedTestSuite:
             # Pass if all pixels within tolerance
             passed = max_diff <= self.config.TOLERANCE
             
+            # Only print detailed debug info for failing cases
+            if not passed:
+                print(f"\n  ⚠️  QA FAILURE DEBUG:")
+                print(f"     Output shape: {output_roi.shape}")
+                print(f"     Reference shape: {ref_roi.shape}")
+                print(f"     Max pixel difference: {max_diff}")
+                print(f"     Output sample (top-left 5x5):\n{output_roi.astype(np.int16)[:5, :5]}")
+                print(f"     Reference sample (top-left 5x5):\n{ref_roi.astype(np.int16)[:5, :5]}")
+                print(f"     Difference sample (top-left 5x5):\n{abs_diff[:5, :5]}\n")
+            
             return passed, stats
             
         except Exception as e:
             return False, {"error": str(e)}
     
+    def _convert_layout(self, tensor, from_layout, to_layout):
+        """Convert tensor between layouts (NCHW <-> NHWC)"""
+        from rpp_pybind.amd.rpp.layout_utils import convert_nchw_to_nhwc, convert_nhwc_to_nchw
+        
+        if from_layout == to_layout:
+            return tensor
+        
+        # NCHW to NHWC conversion
+        if from_layout == 'NCHW' and to_layout == 'NHWC':
+            return convert_nchw_to_nhwc(tensor)
+        # NHWC to NCHW conversion
+        elif from_layout == 'NHWC' and to_layout == 'NCHW':
+            return convert_nhwc_to_nchw(tensor)
+        else:
+            return tensor
+    
+    def _run_augmentation_test(self, aug_name, aug_function, aug_params, ref_file_suffix=""):
+        """
+        Generic function to run augmentation test across all layout variants.
+        
+        Args:
+            aug_name: Name of augmentation (e.g., 'brightness')
+            aug_function: Function to call (e.g., fn.brightness)
+            aug_params: Dictionary of augmentation-specific parameters
+            ref_file_suffix: Optional suffix for reference file (e.g., '_interpolationTypeBicubic')
+        """
+        device = 'cuda' if self.backend == HIP else 'cpu'
+        
+        # Load reference ONCE (before loop)
+        ref_data = None
+        if self.mode in ["QA", "ALL"]:
+            ref_path = os.path.join(
+                self.config.REFERENCE_DIR, aug_name,
+                f"{aug_name}_u8_Tensor{ref_file_suffix}.bin"
+            )
+            if os.path.exists(ref_path):
+                ref_data = np.fromfile(ref_path, dtype=np.uint8)
+                print(f"  Loaded reference: {len(ref_data)} bytes\n")
+        
+        # Track overall success
+        overall_success_count = 0
+        overall_total = 0
+
+        # Loop through all layout variants
+        for input_layout, output_layout in self.config.LAYOUT_VARIANTS:
+            variant_name = f"{input_layout}-{output_layout}"
+            print(f"  Testing variant: {variant_name}")
+            
+            variant_success = 0
+            grayscale = (input_layout.upper() == 'PLN1')
+
+            # Process each test image
+            for idx, img_path in enumerate(self.test_images):
+                image_name = os.path.basename(img_path)
+                if self.mode in ["QA", "ALL"]:
+                    overall_total += 1
+
+                try:
+                    # Load image - always returns NCHW (PLN3 format)
+                    image = util.load_image(img_path, grayscale=grayscale, device=device)
+
+                    # Convert to required input layout
+                    # PKD3 = NHWC (channels last), PLN3 = NCHW (channels first)
+                    if input_layout == 'PKD3':
+                        image = self._convert_layout(image, 'NCHW', 'NHWC')
+                        input_layout_str = 'NHWC'
+                    else:  # PLN3 or PLN1
+                        input_layout_str = 'NCHW'
+                    
+                    # Set output layout
+                    output_layout_str = 'NHWC' if output_layout == 'PKD3' else 'NCHW'
+
+                    # Get ROI
+                    actual_h, actual_w = self.config.IMAGE_SPECS[idx]
+                    roi_widths = [actual_w]
+                    roi_heights = [actual_h]
+                    
+                    # Call augmentation function
+                    output = aug_function(
+                        image,
+                        roi_widths=roi_widths,
+                        roi_heights=roi_heights,
+                        input_layout=input_layout_str,
+                        output_layout=output_layout_str,
+                        backend=self.backend,
+                        **aug_params
+                    )
+                    
+                    # UNIT MODE: Save output
+                    # For saving, ALWAYS convert to PKD3 (NHWC) format
+                    if self.mode in ["UNIT", "ALL"]:
+                        # Check output shape to determine if conversion needed
+                        if len(output.shape) == 4:
+                            if output.shape[1] == 3:  # PLN3 (NCHW) - needs conversion
+                                output_for_save = self._convert_layout(output, 'NCHW', 'NHWC')
+                            else:  # Already NHWC (PKD3)
+                                output_for_save = output
+                        else:
+                            output_for_save = output
+                        
+                        if self._save_output_image(output_for_save, aug_name, image_name, idx, layout_variant=variant_name):
+                            print(f"    ✓ {image_name} ({variant_name}): SAVED")
+                            if self.mode == "UNIT":
+                                variant_success += 1
+                        else:
+                            print(f"    ✗ {image_name} ({variant_name}): SAVE FAILED")
+                    
+                    # QA MODE: Compare with reference (all variants including grayscale)
+                    # Reference is ALWAYS in PKD3 (NHWC) format for RGB, PLN1 (NCHW) for grayscale
+                    # Convert ANY output to PKD3/PLN1 before comparison
+                    if self.mode in ["QA", "ALL"] and ref_data is not None:
+                        if grayscale:
+                            # Grayscale: output is already in NCHW format
+                            output_for_qa = output
+                        else:
+                            # RGB: Determine current output layout from tensor shape
+                            # If 2nd dim is 3 -> PLN3 (NCHW), if last dim is 3 -> PKD3 (NHWC)
+                            if len(output.shape) == 4:
+                                if output.shape[1] == 3:  # PLN3 (NCHW)
+                                    # Convert PLN3 to PKD3 for comparison
+                                    output_for_qa = self._convert_layout(output, 'NCHW', 'NHWC')
+                                elif output.shape[3] == 3:  # PKD3 (NHWC)
+                                    # Already in PKD3 format
+                                    output_for_qa = output
+                                else:
+                                    output_for_qa = output
+                            else:
+                                output_for_qa = output
+
+                        passed, stats = self._compare_with_reference(output_for_qa, ref_data, idx, is_grayscale=grayscale)
+                        
+                        if passed:
+                            print(f"    ✓ {variant_name}/{image_name}: QA PASS")
+                            variant_success += 1
+                            overall_success_count += 1
+                        else:
+                            # Check if error occurred or just pixel mismatch
+                            if "error" in stats:
+                                print(f"    ✗ {variant_name}/{image_name}: QA FAIL - {stats['error']}")
+                            else:
+                                print(f"    ✗ {variant_name}/{image_name}: QA FAIL (diff={stats['max_diff']})")
+                                print(f"      (tolerance: {self.config.TOLERANCE})")
+                                print(f"      Mismatched: {stats['mismatched_pixels']}/{stats['total_pixels']} ({100-stats['match_percentage']:.2f}%)")
+                    
+                except Exception as e:
+                    print(f"    ✗ {image_name} ({variant_name}): ERROR → {e}")
+                    import traceback
+                    traceback.print_exc()
+            
+            print(f"  {variant_name}: {variant_success}/{len(self.test_images)}\n")
+        
+        # Report results
+        if self.mode == "QA":
+            success = overall_success_count == overall_total
+            status = f"PASSED {overall_success_count}/{overall_total} comparisons"
+            print(f"\n  OVERALL: {overall_success_count}/{overall_total} {'✓' if success else '✗'}")
+            self.results['qa'].append((aug_name, success))
+        elif self.mode == "UNIT":
+            # For UNIT mode, count all saved images including PLN1
+            success = True  # If we got here without exceptions
+            self.results['unit'].append((aug_name, success))
+        else:  # ALL
+            success = overall_success_count == overall_total
+            self.results['unit'].append((aug_name, True))
+            self.results['qa'].append((aug_name, success))
+        
+        return success
+
     # =========================================================================
     # AUGMENTATION FUNCTIONS (Combined Unit + QA)
     # =========================================================================
     
     def test_brightness(self):
-        """
-        Brightness augmentation test.
-        - Unit mode: Apply and save
-        - QA mode: Apply and compare with reference
-        """
-        aug_name = "brightness"
-        params = self.config.AUGMENTATION_PARAMS[aug_name]
-        device = 'cuda' if self.backend == HIP else 'cpu'
-        
-        print(f"  [1/10] Brightness (alpha={params['alpha']}, beta={params['beta']})")
+        """Brightness augmentation test - All layout variants"""
+        params = self.config.AUGMENTATION_PARAMS['brightness']
+        print(f"  [brightness] (alpha={params['alpha']}, beta={params['beta']})")
         print("  " + "-" * 50)
-        
-        # Load reference data for QA mode
-        ref_data = None
-        if self.mode in ["QA", "ALL"]:
-            ref_path = os.path.join(
-                self.config.REFERENCE_DIR,
-                aug_name,
-                f"{aug_name}_u8_Tensor.bin"
-            )
-            if os.path.exists(ref_path):
-                ref_data = np.fromfile(ref_path, dtype=np.uint8)
-                print(f"  Loaded reference: {len(ref_data)} bytes")
-            else:
-                print(f"  ✗ Reference not found: {ref_path}")
-                return False
-        
-        success_count = 0
-        total = len(self.test_images)
-        
-        # Process each test image
-        for idx, img_path in enumerate(self.test_images):
-            image_name = os.path.basename(img_path)
-            
-            try:
-                # Load and apply augmentation
-                image = util.load_image(img_path, device=device)
-                
-                # Get actual dimensions for ROI
-                actual_h, actual_w = self.config.IMAGE_SPECS[idx]
-                roi_widths = [actual_w]
-                roi_heights = [actual_h]
-                
-                output = fn.brightness(
-                    image, 
-                    alpha=params['alpha'], 
-                    beta=params['beta'],
-                    roi_widths=roi_widths,
-                    roi_heights=roi_heights,
-                    backend=self.backend
-                )
-                
-                # UNIT MODE: Save output
-                if self.mode in ["UNIT", "ALL"]:
-                    if self._save_output_image(output, aug_name, image_name, idx):
-                        print(f"    ✓ {image_name} : SAVED")
-                        if self.mode == "UNIT":
-                            success_count += 1
-                    else:
-                        print(f"    ✗ {image_name} : SAVE FAILED")
-                
-                # QA MODE: Compare with reference
-                if self.mode in ["QA", "ALL"] and ref_data is not None:
-                    passed, stats = self._compare_with_reference(output, ref_data, idx)
-                    
-                    if passed:
-                        print(f"    ✓ {image_name} : QA PASS (max_diff={stats['max_diff']})")
-                        if self.mode == "QA" or self.mode == "ALL":
-                            success_count += 1
-                    else:
-                        print(f"    ✗ {image_name} : QA FAIL")
-                        if "error" in stats:
-                            print(f"      Error: {stats['error']}")
-                        else:
-                            print(f"      Max diff: {stats['max_diff']} (tolerance: {self.config.TOLERANCE})")
-                            print(f"      Mismatched: {stats['mismatched_pixels']}/{stats['total_pixels']} ({100-stats['match_percentage']:.2f}%)")
-                
-            except Exception as e:
-                print(f"    ✗ {image_name} : ERROR → {e}")
-        
-        # Report results
-        success = success_count == total
-        if self.mode == "UNIT":
-            status = f"SAVED {success_count}/{total} images"
-        elif self.mode == "QA":
-            status = f"PASSED {success_count}/{total} comparisons"
-        else:  # ALL
-            status = f"COMPLETED {success_count}/{total} tests"
-        
-        print(f"\n  RESULT: {status} {'✓' if success else '✗'}")
-        
-        if self.mode == "UNIT":
-            self.results['unit'].append((aug_name, success))
-        elif self.mode == "QA":
-            self.results['qa'].append((aug_name, success))
-        else:  # ALL
-            self.results['unit'].append((aug_name, True))  # Assume unit passed if we get here
-            self.results['qa'].append((aug_name, success))
-        
-        return success
+        return self._run_augmentation_test('brightness', fn.brightness, params)
     
     def test_gamma_correction(self):
-        """
-        Gamma correction augmentation test.
-        - Unit mode: Apply and save
-        - QA mode: Apply and compare with reference
-        """
-        aug_name = "gamma_correction"
-        params = self.config.AUGMENTATION_PARAMS[aug_name]
-        device = 'cuda' if self.backend == HIP else 'cpu'
-        
-        print(f"  [2/10] Gamma Correction (gamma={params['gamma']})")
+        """Gamma correction augmentation test - All layout variants"""
+        params = self.config.AUGMENTATION_PARAMS['gamma_correction']
+        print(f"  [gamma_correction] (gamma={params['gamma']})")
         print("  " + "-" * 50)
-        
-        # Load reference data for QA mode
-        ref_data = None
-        if self.mode in ["QA", "ALL"]:
-            ref_path = os.path.join(
-                self.config.REFERENCE_DIR,
-                aug_name,
-                f"{aug_name}_u8_Tensor.bin"
-            )
-            if os.path.exists(ref_path):
-                ref_data = np.fromfile(ref_path, dtype=np.uint8)
-                print(f"  Loaded reference: {len(ref_data)} bytes")
-            else:
-                print(f"  ✗ Reference not found: {ref_path}")
-                return False
-        
-        success_count = 0
-        total = len(self.test_images)
-        
-        # Process each test image
-        for idx, img_path in enumerate(self.test_images):
-            image_name = os.path.basename(img_path)
-            
-            try:
-                # Load and apply augmentation
-                image = util.load_image(img_path, device=device)
-                
-                # Get actual dimensions for ROI
-                actual_h, actual_w = self.config.IMAGE_SPECS[idx]
-                roi_widths = [actual_w]
-                roi_heights = [actual_h]
-                
-                output = fn.gamma_correction(
-                    image, 
-                    gamma=params['gamma'],
-                    roi_widths=roi_widths,
-                    roi_heights=roi_heights,
-                    backend=self.backend
-                )
-                
-                # UNIT MODE: Save output
-                if self.mode in ["UNIT", "ALL"]:
-                    if self._save_output_image(output, aug_name, image_name, idx):
-                        print(f"    ✓ {image_name} : SAVED")
-                        if self.mode == "UNIT":
-                            success_count += 1
-                    else:
-                        print(f"    ✗ {image_name} : SAVE FAILED")
-                
-                # QA MODE: Compare with reference
-                if self.mode in ["QA", "ALL"] and ref_data is not None:
-                    passed, stats = self._compare_with_reference(output, ref_data, idx)
-                    
-                    if passed:
-                        print(f"    ✓ {image_name} : QA PASS")
-                        if self.mode == "QA" or self.mode == "ALL":
-                            success_count += 1
-                    else:
-                        print(f"    ✗ {image_name} : QA FAIL")
-                        if "error" in stats:
-                            print(f"      Error: {stats['error']}")
-                        else:
-                            print(f"      Max diff: {stats['max_diff']}")
-                
-            except Exception as e:
-                print(f"    ✗ {image_name} : ERROR → {e}")
-        
-        # Report results
-        success = success_count == total
-        if self.mode == "UNIT":
-            status = f"SAVED {success_count}/{total} images"
-        elif self.mode == "QA":
-            status = f"PASSED {success_count}/{total} comparisons"
-        else:
-            status = f"COMPLETED {success_count}/{total} tests"
-        
-        print(f"\n  RESULT: {status} {'✓' if success else '✗'}")
-        
-        if self.mode == "UNIT":
-            self.results['unit'].append((aug_name, success))
-        elif self.mode == "QA":
-            self.results['qa'].append((aug_name, success))
-        else:
-            self.results['unit'].append((aug_name, True))
-            self.results['qa'].append((aug_name, success))
-        
-        return success
+        return self._run_augmentation_test('gamma_correction', fn.gamma_correction, params)
     
     def test_flip(self):
-        """
-        Flip augmentation test.
-        - Unit mode: Apply and save
-        - QA mode: Apply and compare with reference
-        """
-        aug_name = "flip"
-        params = self.config.AUGMENTATION_PARAMS[aug_name]
-        device = 'cuda' if self.backend == HIP else 'cpu'
-        
-        print(f"  [3/10] Flip (horizontal={params['horizontal']}, vertical={params['vertical']})")
+        """Flip augmentation test - All layout variants"""
+        params = self.config.AUGMENTATION_PARAMS['flip']
+        print(f"  [flip] (horizontal={params['horizontal']}, vertical={params['vertical']})")
         print("  " + "-" * 50)
-        
-        if not hasattr(fn, 'flip'):
-            print("  SKIP (function not available)")
-            self.results[self.mode.lower()].append((aug_name, None))
-            return None
-        
-        # Load reference data for QA mode
-        ref_data = None
-        if self.mode in ["QA", "ALL"]:
-            ref_path = os.path.join(
-                self.config.REFERENCE_DIR,
-                aug_name,
-                f"{aug_name}_u8_Tensor.bin"
-            )
-            if os.path.exists(ref_path):
-                ref_data = np.fromfile(ref_path, dtype=np.uint8)
-                print(f"  Loaded reference: {len(ref_data)} bytes")
-            else:
-                print(f"  ✗ Reference not found: {ref_path}")
-                return False
-        
-        success_count = 0
-        total = len(self.test_images)
-        
-        # Process each test image
-        for idx, img_path in enumerate(self.test_images):
-            image_name = os.path.basename(img_path)
-            
-            try:
-                # Load and apply augmentation
-                image = util.load_image(img_path, device=device)
-                
-                # Get actual dimensions for ROI
-                actual_h, actual_w = self.config.IMAGE_SPECS[idx]
-                roi_widths = [actual_w]
-                roi_heights = [actual_h]
-                
-                output = fn.flip(
-                    image, 
-                    horizontal=True,
-                    vertical=False,
-                    roi_widths=roi_widths,
-                    roi_heights=roi_heights,
-                    backend=self.backend
-                )
-                
-                # UNIT MODE: Save output
-                if self.mode in ["UNIT", "ALL"]:
-                    if self._save_output_image(output, aug_name, image_name, idx):
-                        print(f"    ✓ {image_name} : SAVED")
-                        if self.mode == "UNIT":
-                            success_count += 1
-                    else:
-                        print(f"    ✗ {image_name} : SAVE FAILED")
-                
-                # QA MODE: Compare with reference
-                if self.mode in ["QA", "ALL"] and ref_data is not None:
-                    passed, stats = self._compare_with_reference(output, ref_data, idx)
-                    
-                    if passed:
-                        print(f"    ✓ {image_name} : QA PASS")
-                        if self.mode == "QA" or self.mode == "ALL":
-                            success_count += 1
-                    else:
-                        print(f"    ✗ {image_name} : QA FAIL")
-                        if "error" in stats:
-                            print(f"      Error: {stats['error']}")
-                        else:
-                            print(f"      Max diff: {stats['max_diff']}")
-                
-            except Exception as e:
-                print(f"    ✗ {image_name} : ERROR → {e}")
-        
-        # Report results
-        success = success_count == total
-        if self.mode == "UNIT":
-            status = f"SAVED {success_count}/{total} images"
-        elif self.mode == "QA":
-            status = f"PASSED {success_count}/{total} comparisons"
-        else:
-            status = f"COMPLETED {success_count}/{total} tests"
-        
-        print(f"\n  RESULT: {status} {'✓' if success else '✗'}")
-        
-        if self.mode == "UNIT":
-            self.results['unit'].append((aug_name, success))
-        elif self.mode == "QA":
-            self.results['qa'].append((aug_name, success))
-        else:
-            self.results['unit'].append((aug_name, True))
-            self.results['qa'].append((aug_name, success))
-        
-        return success
+        return self._run_augmentation_test('flip', fn.flip, params)
     
     def test_resize(self):
-        """
-        Resize augmentation test.
-        - Unit mode: Apply and save
-        - QA mode: Apply and compare with reference
-        """
-        aug_name = "resize"
-        params = self.config.AUGMENTATION_PARAMS[aug_name]
-        device = 'cuda' if self.backend == HIP else 'cpu'
-        
-        print(f"  [4/10] Resize (width={params['width']}, height={params['height']})")
+        """Resize augmentation test - Per-image dimensions (width/2, height/2)"""
+        print(f"  [resize] (per-image: width/2, height/2)")
         print("  " + "-" * 50)
         
-        if not hasattr(fn, 'resize'):
-            print("  SKIP (function not available)")
-            self.results[self.mode.lower()].append((aug_name, None))
-            return None
-        
-        # Load reference data for QA mode
+        device = 'cuda' if self.backend == HIP else 'cpu'
         ref_data = None
         if self.mode in ["QA", "ALL"]:
             ref_path = os.path.join(
-                self.config.REFERENCE_DIR,
-                aug_name,
-                f"{aug_name}_u8_Tensor_interpolationTypeBicubic.bin"
+                self.config.REFERENCE_DIR, 'resize',
+                f"resize_u8_Tensor_interpolationTypeBicubic.bin"
             )
             if os.path.exists(ref_path):
                 ref_data = np.fromfile(ref_path, dtype=np.uint8)
-                print(f"  Loaded reference: {len(ref_data)} bytes")
-            else:
-                print(f"  ✗ Reference not found: {ref_path}")
-                return False
+                print(f"  Loaded reference: {len(ref_data)} bytes\n")
         
-        success_count = 0
-        total = len(self.test_images)
-        
-        # Process each test image
-        for idx, img_path in enumerate(self.test_images):
-            image_name = os.path.basename(img_path)
-            
-            try:
-                # Load and apply augmentation
-                image = util.load_image(img_path, device=device)
-                
-                # Get actual dimensions for ROI
-                actual_h, actual_w = self.config.IMAGE_SPECS[idx]
-                roi_widths = [actual_w]
-                roi_heights = [actual_h]
-                
-                output = fn.resize(
-                    image, 
-                    width=params['width'], 
-                    height=params['height'],
-                    roi_widths=roi_widths,
-                    roi_heights=roi_heights,
-                    backend=self.backend
-                )
-                
-                # UNIT MODE: Save output
-                if self.mode in ["UNIT", "ALL"]:
-                    if self._save_output_image(output, aug_name, image_name, idx):
-                        print(f"    ✓ {image_name} : SAVED")
-                        if self.mode == "UNIT":
-                            success_count += 1
-                    else:
-                        print(f"    ✗ {image_name} : SAVE FAILED")
-                
-                # QA MODE: Compare with reference
-                if self.mode in ["QA", "ALL"] and ref_data is not None:
-                    passed, stats = self._compare_with_reference(output, ref_data, idx)
+        overall_success_count = 0
+        overall_total = 0
+
+        for input_layout, output_layout in self.config.LAYOUT_VARIANTS:
+            variant_name = f"{input_layout}-{output_layout}"
+            print(f"  Testing variant: {variant_name}")
+            variant_success = 0
+            grayscale = (input_layout.upper() == 'PLN1')
+
+            for idx, img_path in enumerate(self.test_images):
+                image_name = os.path.basename(img_path)
+                if self.mode in ["QA", "ALL"] and not grayscale:
+                    overall_total += 1
+
+                try:
+                    image = util.load_image(img_path, grayscale=grayscale, device=device)
+                    if input_layout == 'PKD3':
+                        image = self._convert_layout(image, 'NCHW', 'NHWC')
+                        input_layout_str = 'NHWC'
+                    else:  # PLN3 or PLN1
+                        input_layout_str = 'NCHW'
                     
-                    if passed:
-                        print(f"    ✓ {image_name} : QA PASS")
-                        if self.mode == "QA" or self.mode == "ALL":
-                            success_count += 1
-                    else:
-                        print(f"    ✗ {image_name} : QA FAIL")
-                        if "error" in stats:
-                            print(f"      Error: {stats['error']}")
+                    # Set output layout
+                    output_layout_str = 'NHWC' if output_layout == 'PKD3' else 'NCHW'
+                    
+                    # Calculate resize dimensions per image (half of original)
+                    actual_h, actual_w = self.config.IMAGE_SPECS[idx]
+                    resize_width = actual_w // 2
+                    resize_height = actual_h // 2
+                    
+                    output = fn.resize(
+                        image,
+                        width=resize_width,
+                        height=resize_height,
+                        roi_widths=[actual_w],
+                        roi_heights=[actual_h],
+                        input_layout=input_layout_str,
+                        output_layout=output_layout_str,
+                        backend=self.backend
+                    )
+                    
+                    if self.mode in ["UNIT", "ALL"]:
+                        # Debug: print output shape before conversion
+                        print(f"      DEBUG: output shape before conversion: {output.shape}")
+                        if output_layout == 'PLN3':
+                            output_for_save = self._convert_layout(output, 'NCHW', 'NHWC')
+                            print(f"      DEBUG: output shape after conversion: {output_for_save.shape}")
                         else:
-                            print(f"      Max diff: {stats['max_diff']}")
-                
-            except Exception as e:
-                print(f"    ✗ {image_name} : ERROR → {e}")
+                            output_for_save = output
+                        
+                        if self._save_output_image(output_for_save, 'resize', image_name, idx, layout_variant=variant_name):
+                            print(f"    ✓ {image_name} ({variant_name}): SAVED (resized to {resize_width}x{resize_height})")
+                            if self.mode == "UNIT":
+                                variant_success += 1
+                    
+                    if self.mode in ["QA", "ALL"] and ref_data is not None and not grayscale:
+                        if output_layout == 'PLN3':
+                            output_for_qa = self._convert_layout(output, 'NCHW', 'NHWC')
+                        else:
+                            output_for_qa = output
+
+                        passed, stats = self._compare_with_reference(output_for_qa, ref_data, idx, is_grayscale=False)
+                        
+                        if passed:
+                            print(f"    ✓ {variant_name}/{image_name}: QA PASS")
+                            variant_success += 1
+                            overall_success_count += 1
+                        else:
+                            if "error" in stats:
+                                print(f"    ✗ {variant_name}/{image_name}: QA FAIL - {stats['error']}")
+                            else:
+                                print(f"    ✗ {variant_name}/{image_name}: QA FAIL (diff={stats['max_diff']})")
+                    
+                except Exception as e:
+                    print(f"    ✗ {image_name} ({variant_name}): ERROR → {e}")
+                    import traceback
+                    traceback.print_exc()
+            
+            print(f"  {variant_name}: {variant_success}/{len(self.test_images)}\n")
         
-        # Report results
-        success = success_count == total
-        if self.mode == "UNIT":
-            status = f"SAVED {success_count}/{total} images"
-        elif self.mode == "QA":
-            status = f"PASSED {success_count}/{total} comparisons"
+        if self.mode == "QA":
+            success = overall_success_count == overall_total
+            self.results['qa'].append(('resize', success))
+        elif self.mode == "UNIT":
+            self.results['unit'].append(('resize', True))
         else:
-            status = f"COMPLETED {success_count}/{total} tests"
+            self.results['unit'].append(('resize', True))
+            self.results['qa'].append(('resize', overall_success_count == overall_total))
         
-        print(f"\n  RESULT: {status} {'✓' if success else '✗'}")
-        
-        if self.mode == "UNIT":
-            self.results['unit'].append((aug_name, success))
-        elif self.mode == "QA":
-            self.results['qa'].append((aug_name, success))
-        else:
-            self.results['unit'].append((aug_name, True))
-            self.results['qa'].append((aug_name, success))
-        
-        return success
+        return True
     
     def test_crop(self):
-        """
-        Crop augmentation test.
-        - Unit mode: Apply and save
-        - QA mode: Apply and compare with reference
-        """
-        aug_name = "crop"
-        params = self.config.AUGMENTATION_PARAMS[aug_name]
-        device = 'cuda' if self.backend == HIP else 'cpu'
-        
-        print(f"  [5/10] Crop (x1={params['x1']}, y1={params['y1']}, width={params['crop_width']}, height={params['crop_height']})")
+        """Crop augmentation test - Per-image dimensions (width/2, height/2)"""
+        print(f"  [crop] (x1=10, y1=10, per-image: width/2, height/2)")
         print("  " + "-" * 50)
         
-        if not hasattr(fn, 'crop'):
-            print("  SKIP (function not available)")
-            self.results[self.mode.lower()].append((aug_name, None))
-            return None
-        
-        # Load reference data for QA mode
+        device = 'cuda' if self.backend == HIP else 'cpu'
         ref_data = None
         if self.mode in ["QA", "ALL"]:
             ref_path = os.path.join(
-                self.config.REFERENCE_DIR,
-                aug_name,
-                f"{aug_name}_u8_Tensor.bin"
+                self.config.REFERENCE_DIR, 'crop',
+                f"crop_u8_Tensor.bin"
             )
             if os.path.exists(ref_path):
                 ref_data = np.fromfile(ref_path, dtype=np.uint8)
-                print(f"  Loaded reference: {len(ref_data)} bytes")
-            else:
-                print(f"  ✗ Reference not found: {ref_path}")
-                return False
+                print(f"  Loaded reference: {len(ref_data)} bytes\n")
         
-        success_count = 0
-        total = len(self.test_images)
-        
-        # Process each test image
-        for idx, img_path in enumerate(self.test_images):
-            image_name = os.path.basename(img_path)
-            
-            try:
-                # Load and apply augmentation
-                image = util.load_image(img_path, device=device)
-                output = fn.crop(
-                    image, 
-                    x1=params['x1'], 
-                    y1=params['y1'], 
-                    crop_width=params['crop_width'], 
-                    crop_height=params['crop_height'], 
-                    backend=self.backend
-                )
-                
-                # UNIT MODE: Save output
-                if self.mode in ["UNIT", "ALL"]:
-                    if self._save_output_image(output, aug_name, image_name, idx):
-                        print(f"    ✓ {image_name} : SAVED")
-                        if self.mode == "UNIT":
-                            success_count += 1
-                    else:
-                        print(f"    ✗ {image_name} : SAVE FAILED")
-                
-                # QA MODE: Compare with reference
-                if self.mode in ["QA", "ALL"] and ref_data is not None:
-                    passed, stats = self._compare_with_reference(output, ref_data, idx)
+        overall_success_count = 0
+        overall_total = 0
+
+        for input_layout, output_layout in self.config.LAYOUT_VARIANTS:
+            variant_name = f"{input_layout}-{output_layout}"
+            print(f"  Testing variant: {variant_name}")
+            variant_success = 0
+            grayscale = (input_layout.upper() == 'PLN1')
+
+            for idx, img_path in enumerate(self.test_images):
+                image_name = os.path.basename(img_path)
+                if self.mode in ["QA", "ALL"] and not grayscale:
+                    overall_total += 1
+
+                try:
+                    image = util.load_image(img_path, grayscale=grayscale, device=device)
+                    if input_layout == 'PKD3':
+                        image = self._convert_layout(image, 'NCHW', 'NHWC')
+                        input_layout_str = 'NHWC'
+                    else:  # PLN3 or PLN1
+                        input_layout_str = 'NCHW'
                     
-                    if passed:
-                        print(f"    ✓ {image_name} : QA PASS")
-                        if self.mode == "QA" or self.mode == "ALL":
-                            success_count += 1
-                    else:
-                        print(f"    ✗ {image_name} : QA FAIL")
-                        if "error" in stats:
-                            print(f"      Error: {stats['error']}")
+                    # Set output layout
+                    output_layout_str = 'NHWC' if output_layout == 'PKD3' else 'NCHW'
+                    
+                    # Calculate crop dimensions per image (half of original)
+                    actual_h, actual_w = self.config.IMAGE_SPECS[idx]
+                    crop_width = actual_w // 2
+                    crop_height = actual_h // 2
+                    
+                    output = fn.crop(
+                        image,
+                        x1=10,
+                        y1=10,
+                        crop_width=crop_width,
+                        crop_height=crop_height,
+                        input_layout=input_layout_str,
+                        output_layout=output_layout_str,
+                        backend=self.backend
+                    )
+                    
+                    if self.mode in ["UNIT", "ALL"]:
+                        if output_layout == 'PLN3':
+                            output_for_save = self._convert_layout(output, 'NCHW', 'NHWC')
                         else:
-                            print(f"      Max diff: {stats['max_diff']}")
-                
-            except Exception as e:
-                print(f"    ✗ {image_name} : ERROR → {e}")
+                            output_for_save = output
+                        
+                        if self._save_output_image(output_for_save, 'crop', image_name, idx, layout_variant=variant_name):
+                            print(f"    ✓ {image_name} ({variant_name}): SAVED (cropped to {crop_width}x{crop_height})")
+                            if self.mode == "UNIT":
+                                variant_success += 1
+                    
+                    if self.mode in ["QA", "ALL"] and ref_data is not None and not grayscale:
+                        if output_layout == 'PLN3':
+                            output_for_qa = self._convert_layout(output, 'NCHW', 'NHWC')
+                        else:
+                            output_for_qa = output
+
+                        passed, stats = self._compare_with_reference(output_for_qa, ref_data, idx, is_grayscale=False)
+                        
+                        if passed:
+                            print(f"    ✓ {variant_name}/{image_name}: QA PASS")
+                            variant_success += 1
+                            overall_success_count += 1
+                        else:
+                            if "error" in stats:
+                                print(f"    ✗ {variant_name}/{image_name}: QA FAIL - {stats['error']}")
+                            else:
+                                print(f"    ✗ {variant_name}/{image_name}: QA FAIL (diff={stats['max_diff']})")
+                    
+                except Exception as e:
+                    print(f"    ✗ {image_name} ({variant_name}): ERROR → {e}")
+                    import traceback
+                    traceback.print_exc()
+            
+            print(f"  {variant_name}: {variant_success}/{len(self.test_images)}\n")
         
-        # Report results
-        success = success_count == total
-        if self.mode == "UNIT":
-            status = f"SAVED {success_count}/{total} images"
-        elif self.mode == "QA":
-            status = f"PASSED {success_count}/{total} comparisons"
+        if self.mode == "QA":
+            success = overall_success_count == overall_total
+            self.results['qa'].append(('crop', success))
+        elif self.mode == "UNIT":
+            self.results['unit'].append(('crop', True))
         else:
-            status = f"COMPLETED {success_count}/{total} tests"
+            self.results['unit'].append(('crop', True))
+            self.results['qa'].append(('crop', overall_success_count == overall_total))
         
-        print(f"\n  RESULT: {status} {'✓' if success else '✗'}")
-        
-        if self.mode == "UNIT":
-            self.results['unit'].append((aug_name, success))
-        elif self.mode == "QA":
-            self.results['qa'].append((aug_name, success))
-        else:
-            self.results['unit'].append((aug_name, True))
-            self.results['qa'].append((aug_name, success))
-        
-        return success
+        return True
     
     def test_hue(self):
-        """
-        Hue augmentation test.
-        - Unit mode: Apply and save
-        - QA mode: Apply and compare with reference
-        """
-        aug_name = "hue"
-        params = self.config.AUGMENTATION_PARAMS[aug_name]
-        device = 'cuda' if self.backend == HIP else 'cpu'
-        
-        print(f"  [6/10] Hue (hue_shift={params['hue_shift']})")
+        """Hue augmentation test - All layout variants"""
+        params = self.config.AUGMENTATION_PARAMS['hue']
+        print(f"  [hue] (hue_shift={params['hue_shift']})")
         print("  " + "-" * 50)
-        
-        if not hasattr(fn, 'hue'):
-            print("  SKIP (function not available)")
-            self.results[self.mode.lower()].append((aug_name, None))
-            return None
-        
-        # Load reference data for QA mode
-        ref_data = None
-        if self.mode in ["QA", "ALL"]:
-            ref_path = os.path.join(
-                self.config.REFERENCE_DIR,
-                aug_name,
-                f"{aug_name}_u8_Tensor.bin"
-            )
-            if os.path.exists(ref_path):
-                ref_data = np.fromfile(ref_path, dtype=np.uint8)
-                print(f"  Loaded reference: {len(ref_data)} bytes")
-            else:
-                print(f"  ✗ Reference not found: {ref_path}")
-                return False
-        
-        success_count = 0
-        total = len(self.test_images)
-        
-        # Process each test image
-        for idx, img_path in enumerate(self.test_images):
-            image_name = os.path.basename(img_path)
-            
-            try:
-                # Load and apply augmentation
-                image = util.load_image(img_path, device=device)
-                
-                # Get actual dimensions for ROI
-                actual_h, actual_w = self.config.IMAGE_SPECS[idx]
-                roi_widths = [actual_w]
-                roi_heights = [actual_h]
-                
-                output = fn.hue(
-                    image, 
-                    hue_shift=params['hue_shift'],
-                    roi_widths=roi_widths,
-                    roi_heights=roi_heights,
-                    backend=self.backend
-                )
-                
-                # UNIT MODE: Save output
-                if self.mode in ["UNIT", "ALL"]:
-                    if self._save_output_image(output, aug_name, image_name, idx):
-                        print(f"    ✓ {image_name} : SAVED")
-                        if self.mode == "UNIT":
-                            success_count += 1
-                    else:
-                        print(f"    ✗ {image_name} : SAVE FAILED")
-                
-                # QA MODE: Compare with reference
-                if self.mode in ["QA", "ALL"] and ref_data is not None:
-                    passed, stats = self._compare_with_reference(output, ref_data, idx)
-                    
-                    if passed:
-                        print(f"    ✓ {image_name} : QA PASS")
-                        if self.mode == "QA" or self.mode == "ALL":
-                            success_count += 1
-                    else:
-                        print(f"    ✗ {image_name} : QA FAIL")
-                        if "error" in stats:
-                            print(f"      Error: {stats['error']}")
-                        else:
-                            print(f"      Max diff: {stats['max_diff']}")
-                
-            except Exception as e:
-                print(f"    ✗ {image_name} : ERROR → {e}")
-        
-        # Report results
-        success = success_count == total
-        if self.mode == "UNIT":
-            status = f"SAVED {success_count}/{total} images"
-        elif self.mode == "QA":
-            status = f"PASSED {success_count}/{total} comparisons"
-        else:
-            status = f"COMPLETED {success_count}/{total} tests"
-        
-        print(f"\n  RESULT: {status} {'✓' if success else '✗'}")
-        
-        if self.mode == "UNIT":
-            self.results['unit'].append((aug_name, success))
-        elif self.mode == "QA":
-            self.results['qa'].append((aug_name, success))
-        else:
-            self.results['unit'].append((aug_name, True))
-            self.results['qa'].append((aug_name, success))
-        
-        return success
+        return self._run_augmentation_test('hue', fn.hue, params)
     
     def test_rotate(self):
-        """
-        Rotate augmentation test.
-        - Unit mode: Apply and save
-        - QA mode: Apply and compare with reference
-        """
-        aug_name = "rotate"
-        params = self.config.AUGMENTATION_PARAMS[aug_name]
-        device = 'cuda' if self.backend == HIP else 'cpu'
-        
-        print(f"  [7/10] Rotate (angle={params['angle']})")
+        """Rotate augmentation test - All layout variants"""
+        params = self.config.AUGMENTATION_PARAMS['rotate']
+        print(f"  [rotate] (angle={params['angle']})")
         print("  " + "-" * 50)
-        
-        if not hasattr(fn, 'rotate'):
-            print("  SKIP (function not available)")
-            self.results[self.mode.lower()].append((aug_name, None))
-            return None
-        
-        # Load reference data for QA mode
-        ref_data = None
-        if self.mode in ["QA", "ALL"]:
-            ref_path = os.path.join(
-                self.config.REFERENCE_DIR,
-                aug_name,
-                f"{aug_name}_u8_Tensor_interpolationTypeBilinear.bin"
-            )
-            if os.path.exists(ref_path):
-                ref_data = np.fromfile(ref_path, dtype=np.uint8)
-                print(f"  Loaded reference: {len(ref_data)} bytes")
-            else:
-                print(f"  ✗ Reference not found: {ref_path}")
-                return False
-        
-        success_count = 0
-        total = len(self.test_images)
-        
-        # Process each test image
-        for idx, img_path in enumerate(self.test_images):
-            image_name = os.path.basename(img_path)
-            
-            try:
-                # Load and apply augmentation
-                image = util.load_image(img_path, device=device)
-                
-                # Get actual dimensions for ROI
-                actual_h, actual_w = self.config.IMAGE_SPECS[idx]
-                roi_widths = [actual_w]
-                roi_heights = [actual_h]
-                
-                output = fn.rotate(
-                    image, 
-                    angle=params['angle'],
-                    roi_widths=roi_widths,
-                    roi_heights=roi_heights,
-                    backend=self.backend
-                )
-                
-                # UNIT MODE: Save output
-                if self.mode in ["UNIT", "ALL"]:
-                    if self._save_output_image(output, aug_name, image_name, idx):
-                        print(f"    ✓ {image_name} : SAVED")
-                        if self.mode == "UNIT":
-                            success_count += 1
-                    else:
-                        print(f"    ✗ {image_name} : SAVE FAILED")
-                
-                # QA MODE: Compare with reference
-                if self.mode in ["QA", "ALL"] and ref_data is not None:
-                    passed, stats = self._compare_with_reference(output, ref_data, idx)
-                    
-                    if passed:
-                        print(f"    ✓ {image_name} : QA PASS")
-                        if self.mode == "QA" or self.mode == "ALL":
-                            success_count += 1
-                    else:
-                        print(f"    ✗ {image_name} : QA FAIL")
-                        if "error" in stats:
-                            print(f"      Error: {stats['error']}")
-                        else:
-                            print(f"      Max diff: {stats['max_diff']}")
-                
-            except Exception as e:
-                print(f"    ✗ {image_name} : ERROR → {e}")
-        
-        # Report results
-        success = success_count == total
-        if self.mode == "UNIT":
-            status = f"SAVED {success_count}/{total} images"
-        elif self.mode == "QA":
-            status = f"PASSED {success_count}/{total} comparisons"
-        else:
-            status = f"COMPLETED {success_count}/{total} tests"
-        
-        print(f"\n  RESULT: {status} {'✓' if success else '✗'}")
-        
-        if self.mode == "UNIT":
-            self.results['unit'].append((aug_name, success))
-        elif self.mode == "QA":
-            self.results['qa'].append((aug_name, success))
-        else:
-            self.results['unit'].append((aug_name, True))
-            self.results['qa'].append((aug_name, success))
-        
-        return success
+        return self._run_augmentation_test('rotate', fn.rotate, params, ref_file_suffix='_interpolationTypeBilinear')
     
     def test_contrast(self):
-        """
-        Contrast augmentation test.
-        - Unit mode: Apply and save
-        - QA mode: Apply and compare with reference
-        """
-        aug_name = "contrast"
-        params = self.config.AUGMENTATION_PARAMS[aug_name]
-        device = 'cuda' if self.backend == HIP else 'cpu'
-        
-        print(f"  [8/10] Contrast (factor={params['contrast_factor']}, center={params['contrast_center']})")
+        """Contrast augmentation test - All layout variants"""
+        params = self.config.AUGMENTATION_PARAMS['contrast']
+        print(f"  [contrast] (factor={params['contrast_factor']}, center={params['contrast_center']})")
         print("  " + "-" * 50)
-        
-        if not hasattr(fn, 'contrast'):
-            print("  SKIP (function not available)")
-            self.results[self.mode.lower()].append((aug_name, None))
-            return None
-        
-        # Load reference data for QA mode
-        ref_data = None
-        if self.mode in ["QA", "ALL"]:
-            ref_path = os.path.join(
-                self.config.REFERENCE_DIR,
-                aug_name,
-                f"{aug_name}_u8_Tensor.bin"
-            )
-            if os.path.exists(ref_path):
-                ref_data = np.fromfile(ref_path, dtype=np.uint8)
-                print(f"  Loaded reference: {len(ref_data)} bytes")
-            else:
-                print(f"  ✗ Reference not found: {ref_path}")
-                return False
-        
-        success_count = 0
-        total = len(self.test_images)
-        
-        # Process each test image
-        for idx, img_path in enumerate(self.test_images):
-            image_name = os.path.basename(img_path)
-            
-            try:
-                # Load and apply augmentation
-                image = util.load_image(img_path, device=device)
-                
-                # Get actual dimensions for ROI
-                actual_h, actual_w = self.config.IMAGE_SPECS[idx]
-                roi_widths = [actual_w]
-                roi_heights = [actual_h]
-                
-                output = fn.contrast(
-                    image, 
-                    contrast_factor=params['contrast_factor'], 
-                    contrast_center=params['contrast_center'],
-                    roi_widths=roi_widths,
-                    roi_heights=roi_heights,
-                    backend=self.backend
-                )
-                
-                # UNIT MODE: Save output
-                if self.mode in ["UNIT", "ALL"]:
-                    if self._save_output_image(output, aug_name, image_name, idx):
-                        print(f"    ✓ {image_name} : SAVED")
-                        if self.mode == "UNIT":
-                            success_count += 1
-                    else:
-                        print(f"    ✗ {image_name} : SAVE FAILED")
-                
-                # QA MODE: Compare with reference
-                if self.mode in ["QA", "ALL"] and ref_data is not None:
-                    passed, stats = self._compare_with_reference(output, ref_data, idx)
-                    
-                    if passed:
-                        print(f"    ✓ {image_name} : QA PASS")
-                        if self.mode == "QA" or self.mode == "ALL":
-                            success_count += 1
-                    else:
-                        print(f"    ✗ {image_name} : QA FAIL")
-                        if "error" in stats:
-                            print(f"      Error: {stats['error']}")
-                        else:
-                            print(f"      Max diff: {stats['max_diff']}")
-                
-            except Exception as e:
-                print(f"    ✗ {image_name} : ERROR → {e}")
-        
-        # Report results
-        success = success_count == total
-        if self.mode == "UNIT":
-            status = f"SAVED {success_count}/{total} images"
-        elif self.mode == "QA":
-            status = f"PASSED {success_count}/{total} comparisons"
-        else:
-            status = f"COMPLETED {success_count}/{total} tests"
-        
-        print(f"\n  RESULT: {status} {'✓' if success else '✗'}")
-        
-        if self.mode == "UNIT":
-            self.results['unit'].append((aug_name, success))
-        elif self.mode == "QA":
-            self.results['qa'].append((aug_name, success))
-        else:
-            self.results['unit'].append((aug_name, True))
-            self.results['qa'].append((aug_name, success))
-        
-        return success
+        return self._run_augmentation_test('contrast', fn.contrast, params)
     
     def test_vignette(self):
-        """
-        Vignette augmentation test.
-        - Unit mode: Apply and save
-        - QA mode: Apply and compare with reference
-        """
-        aug_name = "vignette"
-        params = self.config.AUGMENTATION_PARAMS[aug_name]
-        device = 'cuda' if self.backend == HIP else 'cpu'
-        
-        print(f"  [9/10] Vignette (intensity={params['intensity']})")
+        """Vignette augmentation test - All layout variants"""
+        params = self.config.AUGMENTATION_PARAMS['vignette']
+        print(f"  [vignette] (intensity={params['intensity']})")
         print("  " + "-" * 50)
-        
-        if not hasattr(fn, 'vignette'):
-            print("  SKIP (function not available)")
-            self.results[self.mode.lower()].append((aug_name, None))
-            return None
-        
-        # Load reference data for QA mode
-        ref_data = None
-        if self.mode in ["QA", "ALL"]:
-            ref_path = os.path.join(
-                self.config.REFERENCE_DIR,
-                aug_name,
-                f"{aug_name}_u8_Tensor.bin"
-            )
-            if os.path.exists(ref_path):
-                ref_data = np.fromfile(ref_path, dtype=np.uint8)
-                print(f"  Loaded reference: {len(ref_data)} bytes")
-            else:
-                print(f"  ✗ Reference not found: {ref_path}")
-                return False
-        
-        success_count = 0
-        total = len(self.test_images)
-        
-        # Process each test image
-        for idx, img_path in enumerate(self.test_images):
-            image_name = os.path.basename(img_path)
-            
-            try:
-                # Load and apply augmentation
-                image = util.load_image(img_path, device=device)
-                
-                # Get actual dimensions for ROI
-                actual_h, actual_w = self.config.IMAGE_SPECS[idx]
-                roi_widths = [actual_w]
-                roi_heights = [actual_h]
-                
-                output = fn.vignette(
-                    image, 
-                    intensity=params['intensity'],
-                    roi_widths=roi_widths,
-                    roi_heights=roi_heights,
-                    backend=self.backend
-                )
-                
-                # UNIT MODE: Save output
-                if self.mode in ["UNIT", "ALL"]:
-                    if self._save_output_image(output, aug_name, image_name, idx):
-                        print(f"    ✓ {image_name} : SAVED")
-                        if self.mode == "UNIT":
-                            success_count += 1
-                    else:
-                        print(f"    ✗ {image_name} : SAVE FAILED")
-                
-                # QA MODE: Compare with reference
-                if self.mode in ["QA", "ALL"] and ref_data is not None:
-                    passed, stats = self._compare_with_reference(output, ref_data, idx)
-                    
-                    if passed:
-                        print(f"    ✓ {image_name} : QA PASS")
-                        if self.mode == "QA" or self.mode == "ALL":
-                            success_count += 1
-                    else:
-                        print(f"    ✗ {image_name} : QA FAIL")
-                        if "error" in stats:
-                            print(f"      Error: {stats['error']}")
-                        else:
-                            print(f"      Max diff: {stats['max_diff']}")
-                
-            except Exception as e:
-                print(f"    ✗ {image_name} : ERROR → {e}")
-        
-        # Report results
-        success = success_count == total
-        if self.mode == "UNIT":
-            status = f"SAVED {success_count}/{total} images"
-        elif self.mode == "QA":
-            status = f"PASSED {success_count}/{total} comparisons"
-        else:
-            status = f"COMPLETED {success_count}/{total} tests"
-        
-        print(f"\n  RESULT: {status} {'✓' if success else '✗'}")
-        
-        if self.mode == "UNIT":
-            self.results['unit'].append((aug_name, success))
-        elif self.mode == "QA":
-            self.results['qa'].append((aug_name, success))
-        else:
-            self.results['unit'].append((aug_name, True))
-            self.results['qa'].append((aug_name, success))
-        
-        return success
+        return self._run_augmentation_test('vignette', fn.vignette, params)
+    
+    def test_contrast(self):
+        """Contrast augmentation test - All layout variants"""
+        params = self.config.AUGMENTATION_PARAMS['contrast']
+        print(f"  [contrast] (factor={params['contrast_factor']}, center={params['contrast_center']})")
+        print("  " + "-" * 50)
+        return self._run_augmentation_test('contrast', fn.contrast, params)
     
     def test_pixelate(self):
-        """
-        Pixelate augmentation test.
-        - Unit mode: Apply and save
-        - QA mode: Apply and compare with reference
-        """
-        aug_name = "pixelate"
-        params = self.config.AUGMENTATION_PARAMS[aug_name]
-        device = 'cuda' if self.backend == HIP else 'cpu'
-        
-        print(f"  [10/10] Pixelate (percentage={params['pixelation_percentage']})")
+        """Pixelate augmentation test - All layout variants"""
+        params = self.config.AUGMENTATION_PARAMS['pixelate']
+        print(f"  [pixelate] (percentage={params['pixelation_percentage']})")
         print("  " + "-" * 50)
-        
-        if not hasattr(fn, 'pixelate'):
-            print("  SKIP (function not available)")
-            self.results[self.mode.lower()].append((aug_name, None))
-            return None
-        
-        # Load reference data for QA mode
-        ref_data = None
-        if self.mode in ["QA", "ALL"]:
-            ref_path = os.path.join(
-                self.config.REFERENCE_DIR,
-                aug_name,
-                f"{aug_name}_u8_Tensor.bin"
-            )
-            if os.path.exists(ref_path):
-                ref_data = np.fromfile(ref_path, dtype=np.uint8)
-                print(f"  Loaded reference: {len(ref_data)} bytes")
-            else:
-                print(f"  ✗ Reference not found: {ref_path}")
-                return False
-        
-        success_count = 0
-        total = len(self.test_images)
-        
-        # Process each test image
-        for idx, img_path in enumerate(self.test_images):
-            image_name = os.path.basename(img_path)
-            
-            try:
-                # Load and apply augmentation
-                image = util.load_image(img_path, device=device)
-                
-                # Get actual dimensions for ROI
-                actual_h, actual_w = self.config.IMAGE_SPECS[idx]
-                roi_widths = [actual_w]
-                roi_heights = [actual_h]
-                
-                output = fn.pixelate(
-                    image, 
-                    pixelation_percentage=params['pixelation_percentage'],
-                    roi_widths=roi_widths,
-                    roi_heights=roi_heights,
-                    backend=self.backend
-                )
-                
-                # UNIT MODE: Save output
-                if self.mode in ["UNIT", "ALL"]:
-                    if self._save_output_image(output, aug_name, image_name, idx):
-                        print(f"    ✓ {image_name} : SAVED")
-                        if self.mode == "UNIT":
-                            success_count += 1
-                    else:
-                        print(f"    ✗ {image_name} : SAVE FAILED")
-                
-                # QA MODE: Compare with reference
-                if self.mode in ["QA", "ALL"] and ref_data is not None:
-                    passed, stats = self._compare_with_reference(output, ref_data, idx)
-                    
-                    if passed:
-                        print(f"    ✓ {image_name} : QA PASS")
-                        if self.mode == "QA" or self.mode == "ALL":
-                            success_count += 1
-                    else:
-                        print(f"    ✗ {image_name} : QA FAIL")
-                        if "error" in stats:
-                            print(f"      Error: {stats['error']}")
-                        else:
-                            print(f"      Max diff: {stats['max_diff']}")
-                
-            except Exception as e:
-                print(f"    ✗ {image_name} : ERROR → {e}")
-        
-        # Report results
-        success = success_count == total
-        if self.mode == "UNIT":
-            status = f"SAVED {success_count}/{total} images"
-        elif self.mode == "QA":
-            status = f"PASSED {success_count}/{total} comparisons"
-        else:
-            status = f"COMPLETED {success_count}/{total} tests"
-        
-        print(f"\n  RESULT: {status} {'✓' if success else '✗'}")
-        
-        if self.mode == "UNIT":
-            self.results['unit'].append((aug_name, success))
-        elif self.mode == "QA":
-            self.results['qa'].append((aug_name, success))
-        else:
-            self.results['unit'].append((aug_name, True))
-            self.results['qa'].append((aug_name, success))
-        
-        return success
+        return self._run_augmentation_test('pixelate', fn.pixelate, params)
     
     # =========================================================================
     # TEST RUNNERS
