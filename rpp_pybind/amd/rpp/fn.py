@@ -233,7 +233,7 @@ def hue(images, hue_shift=0.0, roi_widths=None, roi_heights=None, input_layout=N
         images = images.cpu()
     
     batch_size = images.shape[0]
-    output = torch.empty_like(images).contiguous()
+    output = torch.zeros_like(images).contiguous()
     
     # Set ROI dimensions
     if roi_widths is None:

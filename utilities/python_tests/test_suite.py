@@ -43,6 +43,23 @@ from rpp_pybind.amd.rpp.rpp_types import (
 print("✓ All RPP modules loaded successfully\n")
 
 # =============================================================================
+# AUGMENTATION GROUPING
+# =============================================================================
+
+AugmentationGroupMap = {
+    "color_augmentations": ["brightness", "gamma_correction", "contrast", "hue"],
+    "effects_augmentations": ["pixelate", "vignette"],
+    "geometric_augmentations": ["flip", "resize", "rotate", "crop"]
+}
+
+def get_augmentation_group(augmentation_name):
+    """Get the group name for a given augmentation"""
+    for group_name, augmentations in AugmentationGroupMap.items():
+        if augmentation_name in augmentations:
+            return group_name
+    return "other_augmentations"  # Fallback for ungrouped augmentations
+
+# =============================================================================
 # TEST CONFIGURATION
 # =============================================================================
 
@@ -188,15 +205,35 @@ class UnifiedTestSuite:
         if deleted_count > 0:
             print(f"Cleaned up {deleted_count} previous output folder(s)")
     
-    def _save_output_image(self, tensor, augmentation_name, image_name, img_idx, layout_variant=None):
+    def _save_output_image(self, tensor, augmentation_name, image_name, img_idx, layout_variant=None, input_layout=None):
         """Save output image to filesystem (Unit mode)"""
         try:
-            # Create augmentation-specific directory
-            aug_output_dir = os.path.join(self.unit_output_dir, augmentation_name)
+            # Get augmentation group
+            group_name = get_augmentation_group(augmentation_name)
             
-            # If layout_variant is provided, create subdirectory for it
-            if layout_variant:
-                aug_output_dir = os.path.join(aug_output_dir, layout_variant)
+            # Extract input and output layouts from variant if not provided
+            if input_layout is None and layout_variant:
+                input_layout, output_layout = layout_variant.split('-')
+            elif layout_variant:
+                output_layout = layout_variant.split('-')[1]
+            else:
+                output_layout = input_layout
+            
+            # Create directory structure:
+            # {input_layout}/rpp_{backend}_{input_layout}_{group}/augmentation/detailed_variant/
+            rpp_dir_name = f"rpp_{self.backend_name.lower()}_{input_layout.lower()}_{group_name}"
+            
+            # Build detailed variant name: {aug}_u8_Tensor_{BACKEND}_{INPUT}_to{OUTPUT}
+            detailed_variant = f"{augmentation_name}_u8_Tensor_{self.backend_name}_{input_layout}_to{output_layout}"
+            
+            # Complete path
+            aug_output_dir = os.path.join(
+                self.unit_output_dir,
+                input_layout,
+                rpp_dir_name,
+                augmentation_name,
+                detailed_variant
+            )
             
             os.makedirs(aug_output_dir, exist_ok=True)
             
@@ -235,15 +272,15 @@ class UnifiedTestSuite:
             if output_hwc.dtype != np.uint8:
                 output_hwc = np.clip(output_hwc, 0, 255).astype(np.uint8)
             
-            # For resize and crop, the output dimensions may differ from input
-            # Don't crop the output - save the full tensor as-is
-            if augmentation_name not in ['resize', 'crop']:
-                # Get actual dimensions and crop before saving (for non-resize/crop augmentations)
-                actual_h, actual_w = self.config.IMAGE_SPECS[img_idx]
-                if len(output_hwc.shape) == 3:  # RGB
-                    output_hwc = output_hwc[:actual_h, :actual_w, :]
-                else:  # Grayscale
-                    output_hwc = output_hwc[:actual_h, :actual_w]
+            # Get actual dimensions and crop before saving (for non-resize/crop augmentations)
+            actual_h, actual_w = self.config.IMAGE_SPECS[img_idx]
+            if augmentation_name in ('crop', 'resize'):
+                actual_h //= 2
+                actual_w //= 2
+            if len(output_hwc.shape) == 3:  # RGB
+                output_hwc = output_hwc[:actual_h, :actual_w, :]
+            else:  # Grayscale
+                output_hwc = output_hwc[:actual_h, :actual_w]
             
             # Save image
             output_path = os.path.join(aug_output_dir, image_name)
@@ -255,7 +292,7 @@ class UnifiedTestSuite:
             print(f"    ✗ Failed to save: {e}")
             return False
     
-    def _extract_from_batch_nhwc(self, batch_data, img_idx, extract_h=None, extract_w=None):
+    def _extract_from_batch_nhwc(self, batch_data, img_idx, extract_h=None, extract_w=None, aug_name=None):
         """
         Extract individual image from NHWC batch reference data.
         
@@ -289,13 +326,17 @@ class UnifiedTestSuite:
         else:
             # Use provided dimensions (for resize/crop cases)
             actual_h, actual_w = extract_h, extract_w
-        
+
+        if aug_name in ('crop', 'resize'):
+            actual_h //= 2
+            actual_w //= 2
+
         # Extract only the valid region (top-left corner)
         ref_roi = img_slot_reshaped[:actual_h, :actual_w, :]
         
         return ref_roi
     
-    def _extract_from_batch_pln1(self, batch_data, img_idx):
+    def _extract_from_batch_pln1(self, batch_data, img_idx, aug_name=None):
         """
         Extract individual grayscale image from PLN1 batch reference data.
         
@@ -323,14 +364,18 @@ class UnifiedTestSuite:
         
         # Get actual dimensions and extract valid region
         actual_h, actual_w = self.config.IMAGE_SPECS[img_idx]
-        
+
+        if aug_name in ('crop', 'resize'):
+            actual_h //= 2
+            actual_w //= 2
+
         # Extract only the valid region (top-left corner)
         ref_roi = img_slot_reshaped[:actual_h, :actual_w]
         
         return ref_roi
 
     
-    def _compare_with_reference(self, output_tensor, ref_data, img_idx, is_grayscale=False):
+    def _compare_with_reference(self, output_tensor, ref_data, img_idx, is_grayscale=False, aug_name=None):
         """
         Compare output tensor with reference from batch.
         
@@ -367,16 +412,19 @@ class UnifiedTestSuite:
             
             # Get actual dimensions for this image
             actual_h, actual_w = self.config.IMAGE_SPECS[img_idx]
+            if aug_name == 'crop' or aug_name == 'resize':
+                actual_h = actual_h // 2;
+                actual_w = actual_w // 2;
             
             # Extract ROI from output (remove any padding)
             if is_grayscale:
                 output_roi = output_hw[:actual_h, :actual_w]
                 # Extract reference for grayscale
-                ref_roi = self._extract_from_batch_pln1(ref_data, img_idx)
+                ref_roi = self._extract_from_batch_pln1(ref_data, img_idx, aug_name=aug_name)
             else:
                 output_roi = output_hwc[:actual_h, :actual_w, :]
                 # Extract reference from batch
-                ref_roi = self._extract_from_batch_nhwc(ref_data, img_idx)
+                ref_roi = self._extract_from_batch_nhwc(ref_data, img_idx, aug_name=aug_name)
             
             # Verify shapes match
             if output_roi.shape != ref_roi.shape:
@@ -456,7 +504,7 @@ class UnifiedTestSuite:
             if os.path.exists(ref_path):
                 ref_data = np.fromfile(ref_path, dtype=np.uint8)
                 print(f"  Loaded reference: {len(ref_data)} bytes\n")
-        
+        print(ref_path)
         # Track overall success
         overall_success_count = 0
         overall_total = 0
@@ -464,10 +512,16 @@ class UnifiedTestSuite:
         # Loop through all layout variants
         for input_layout, output_layout in self.config.LAYOUT_VARIANTS:
             variant_name = f"{input_layout}-{output_layout}"
+            grayscale = (input_layout.upper() == 'PLN1')
+            
+            # Skip PLN1 (grayscale) for color-specific augmentations
+            if grayscale and aug_name in ('hue', 'saturation', 'color_twist', 'color_jitter'):
+                print(f"  Skipping variant: {variant_name} (color augmentation not applicable to grayscale)")
+                continue
+            
             print(f"  Testing variant: {variant_name}")
             
             variant_success = 0
-            grayscale = (input_layout.upper() == 'PLN1')
 
             # Process each test image
             for idx, img_path in enumerate(self.test_images):
@@ -490,10 +544,24 @@ class UnifiedTestSuite:
                     # Set output layout
                     output_layout_str = 'NHWC' if output_layout == 'PKD3' else 'NCHW'
 
-                    # Get ROI
+                    # Get ROI and prepare augmentation-specific parameters
                     actual_h, actual_w = self.config.IMAGE_SPECS[idx]
-                    roi_widths = [actual_w]
-                    roi_heights = [actual_h]
+                    params = aug_params.copy()
+                    
+                    # Handle crop and resize that need per-image dimensions
+                    if aug_name == 'crop':
+                        params['crop_width'] = actual_w // 2
+                        params['crop_height'] = actual_h // 2
+                        roi_widths = [actual_w]
+                        roi_heights = [actual_h]
+                    elif aug_name == 'resize':
+                        params['width'] = actual_w // 2
+                        params['height'] = actual_h // 2
+                        roi_widths = [actual_w // 2]
+                        roi_heights = [actual_h // 2]
+                    else:
+                        roi_widths = [actual_w]
+                        roi_heights = [actual_h]
                     
                     # Call augmentation function
                     output = aug_function(
@@ -503,7 +571,7 @@ class UnifiedTestSuite:
                         input_layout=input_layout_str,
                         output_layout=output_layout_str,
                         backend=self.backend,
-                        **aug_params
+                        **params
                     )
                     
                     # UNIT MODE: Save output
@@ -546,8 +614,8 @@ class UnifiedTestSuite:
                                     output_for_qa = output
                             else:
                                 output_for_qa = output
-
-                        passed, stats = self._compare_with_reference(output_for_qa, ref_data, idx, is_grayscale=grayscale)
+                        
+                        passed, stats = self._compare_with_reference(output_for_qa, ref_data, idx, is_grayscale=grayscale, aug_name=aug_name)
                         
                         if passed:
                             print(f"    ✓ {variant_name}/{image_name}: QA PASS")
@@ -613,214 +681,17 @@ class UnifiedTestSuite:
     
     def test_resize(self):
         """Resize augmentation test - Per-image dimensions (width/2, height/2)"""
+        params = self.config.AUGMENTATION_PARAMS['resize']
         print(f"  [resize] (per-image: width/2, height/2)")
         print("  " + "-" * 50)
-        
-        device = 'cuda' if self.backend == HIP else 'cpu'
-        ref_data = None
-        if self.mode in ["QA", "ALL"]:
-            ref_path = os.path.join(
-                self.config.REFERENCE_DIR, 'resize',
-                f"resize_u8_Tensor_interpolationTypeBicubic.bin"
-            )
-            if os.path.exists(ref_path):
-                ref_data = np.fromfile(ref_path, dtype=np.uint8)
-                print(f"  Loaded reference: {len(ref_data)} bytes\n")
-        
-        overall_success_count = 0
-        overall_total = 0
-
-        for input_layout, output_layout in self.config.LAYOUT_VARIANTS:
-            variant_name = f"{input_layout}-{output_layout}"
-            print(f"  Testing variant: {variant_name}")
-            variant_success = 0
-            grayscale = (input_layout.upper() == 'PLN1')
-
-            for idx, img_path in enumerate(self.test_images):
-                image_name = os.path.basename(img_path)
-                if self.mode in ["QA", "ALL"] and not grayscale:
-                    overall_total += 1
-
-                try:
-                    image = util.load_image(img_path, grayscale=grayscale, device=device)
-                    if input_layout == 'PKD3':
-                        image = self._convert_layout(image, 'NCHW', 'NHWC')
-                        input_layout_str = 'NHWC'
-                    else:  # PLN3 or PLN1
-                        input_layout_str = 'NCHW'
-                    
-                    # Set output layout
-                    output_layout_str = 'NHWC' if output_layout == 'PKD3' else 'NCHW'
-                    
-                    # Calculate resize dimensions per image (half of original)
-                    actual_h, actual_w = self.config.IMAGE_SPECS[idx]
-                    resize_width = actual_w // 2
-                    resize_height = actual_h // 2
-                    
-                    output = fn.resize(
-                        image,
-                        width=resize_width,
-                        height=resize_height,
-                        roi_widths=[actual_w],
-                        roi_heights=[actual_h],
-                        input_layout=input_layout_str,
-                        output_layout=output_layout_str,
-                        backend=self.backend
-                    )
-                    
-                    if self.mode in ["UNIT", "ALL"]:
-                        # Debug: print output shape before conversion
-                        print(f"      DEBUG: output shape before conversion: {output.shape}")
-                        if output_layout == 'PLN3':
-                            output_for_save = self._convert_layout(output, 'NCHW', 'NHWC')
-                            print(f"      DEBUG: output shape after conversion: {output_for_save.shape}")
-                        else:
-                            output_for_save = output
-                        
-                        if self._save_output_image(output_for_save, 'resize', image_name, idx, layout_variant=variant_name):
-                            print(f"    ✓ {image_name} ({variant_name}): SAVED (resized to {resize_width}x{resize_height})")
-                            if self.mode == "UNIT":
-                                variant_success += 1
-                    
-                    if self.mode in ["QA", "ALL"] and ref_data is not None and not grayscale:
-                        if output_layout == 'PLN3':
-                            output_for_qa = self._convert_layout(output, 'NCHW', 'NHWC')
-                        else:
-                            output_for_qa = output
-
-                        passed, stats = self._compare_with_reference(output_for_qa, ref_data, idx, is_grayscale=False)
-                        
-                        if passed:
-                            print(f"    ✓ {variant_name}/{image_name}: QA PASS")
-                            variant_success += 1
-                            overall_success_count += 1
-                        else:
-                            if "error" in stats:
-                                print(f"    ✗ {variant_name}/{image_name}: QA FAIL - {stats['error']}")
-                            else:
-                                print(f"    ✗ {variant_name}/{image_name}: QA FAIL (diff={stats['max_diff']})")
-                    
-                except Exception as e:
-                    print(f"    ✗ {image_name} ({variant_name}): ERROR → {e}")
-                    import traceback
-                    traceback.print_exc()
-            
-            print(f"  {variant_name}: {variant_success}/{len(self.test_images)}\n")
-        
-        if self.mode == "QA":
-            success = overall_success_count == overall_total
-            self.results['qa'].append(('resize', success))
-        elif self.mode == "UNIT":
-            self.results['unit'].append(('resize', True))
-        else:
-            self.results['unit'].append(('resize', True))
-            self.results['qa'].append(('resize', overall_success_count == overall_total))
-        
-        return True
+        return self._run_augmentation_test('resize', fn.resize, params, ref_file_suffix='_interpolationTypeBilinear')
     
     def test_crop(self):
         """Crop augmentation test - Per-image dimensions (width/2, height/2)"""
+        params = self.config.AUGMENTATION_PARAMS['crop']
         print(f"  [crop] (x1=10, y1=10, per-image: width/2, height/2)")
         print("  " + "-" * 50)
-        
-        device = 'cuda' if self.backend == HIP else 'cpu'
-        ref_data = None
-        if self.mode in ["QA", "ALL"]:
-            ref_path = os.path.join(
-                self.config.REFERENCE_DIR, 'crop',
-                f"crop_u8_Tensor.bin"
-            )
-            if os.path.exists(ref_path):
-                ref_data = np.fromfile(ref_path, dtype=np.uint8)
-                print(f"  Loaded reference: {len(ref_data)} bytes\n")
-        
-        overall_success_count = 0
-        overall_total = 0
-
-        for input_layout, output_layout in self.config.LAYOUT_VARIANTS:
-            variant_name = f"{input_layout}-{output_layout}"
-            print(f"  Testing variant: {variant_name}")
-            variant_success = 0
-            grayscale = (input_layout.upper() == 'PLN1')
-
-            for idx, img_path in enumerate(self.test_images):
-                image_name = os.path.basename(img_path)
-                if self.mode in ["QA", "ALL"] and not grayscale:
-                    overall_total += 1
-
-                try:
-                    image = util.load_image(img_path, grayscale=grayscale, device=device)
-                    if input_layout == 'PKD3':
-                        image = self._convert_layout(image, 'NCHW', 'NHWC')
-                        input_layout_str = 'NHWC'
-                    else:  # PLN3 or PLN1
-                        input_layout_str = 'NCHW'
-                    
-                    # Set output layout
-                    output_layout_str = 'NHWC' if output_layout == 'PKD3' else 'NCHW'
-                    
-                    # Calculate crop dimensions per image (half of original)
-                    actual_h, actual_w = self.config.IMAGE_SPECS[idx]
-                    crop_width = actual_w // 2
-                    crop_height = actual_h // 2
-                    
-                    output = fn.crop(
-                        image,
-                        x1=10,
-                        y1=10,
-                        crop_width=crop_width,
-                        crop_height=crop_height,
-                        input_layout=input_layout_str,
-                        output_layout=output_layout_str,
-                        backend=self.backend
-                    )
-                    
-                    if self.mode in ["UNIT", "ALL"]:
-                        if output_layout == 'PLN3':
-                            output_for_save = self._convert_layout(output, 'NCHW', 'NHWC')
-                        else:
-                            output_for_save = output
-                        
-                        if self._save_output_image(output_for_save, 'crop', image_name, idx, layout_variant=variant_name):
-                            print(f"    ✓ {image_name} ({variant_name}): SAVED (cropped to {crop_width}x{crop_height})")
-                            if self.mode == "UNIT":
-                                variant_success += 1
-                    
-                    if self.mode in ["QA", "ALL"] and ref_data is not None and not grayscale:
-                        if output_layout == 'PLN3':
-                            output_for_qa = self._convert_layout(output, 'NCHW', 'NHWC')
-                        else:
-                            output_for_qa = output
-
-                        passed, stats = self._compare_with_reference(output_for_qa, ref_data, idx, is_grayscale=False)
-                        
-                        if passed:
-                            print(f"    ✓ {variant_name}/{image_name}: QA PASS")
-                            variant_success += 1
-                            overall_success_count += 1
-                        else:
-                            if "error" in stats:
-                                print(f"    ✗ {variant_name}/{image_name}: QA FAIL - {stats['error']}")
-                            else:
-                                print(f"    ✗ {variant_name}/{image_name}: QA FAIL (diff={stats['max_diff']})")
-                    
-                except Exception as e:
-                    print(f"    ✗ {image_name} ({variant_name}): ERROR → {e}")
-                    import traceback
-                    traceback.print_exc()
-            
-            print(f"  {variant_name}: {variant_success}/{len(self.test_images)}\n")
-        
-        if self.mode == "QA":
-            success = overall_success_count == overall_total
-            self.results['qa'].append(('crop', success))
-        elif self.mode == "UNIT":
-            self.results['unit'].append(('crop', True))
-        else:
-            self.results['unit'].append(('crop', True))
-            self.results['qa'].append(('crop', overall_success_count == overall_total))
-        
-        return True
+        return self._run_augmentation_test('crop', fn.crop, params)
     
     def test_hue(self):
         """Hue augmentation test - All layout variants"""
@@ -1070,10 +941,11 @@ class UnifiedTestSuite:
 
 
 # =============================================================================
-# MAIN
+# ARGUMENT PARSER AND VALIDATOR
 # =============================================================================
 
-def main():
+def test_suite_parser_and_validator():
+    """Parse and validate command line arguments for the test suite"""
     parser = argparse.ArgumentParser(
         description='RPP Test Suite - Complete Version',
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -1130,10 +1002,12 @@ Examples:
     # Check GPU availability for HIP backend
     if backend == HIP and not is_gpu_available():
         print(f"ERROR: HIP backend requested but GPU not available")
-        return 1
+        sys.exit(1)
     
     # Parse cases argument
     case_list = None
+    reverse_case_map = None
+    
     if args.case_list:
         # Case name to index mapping
         case_map = {
@@ -1172,12 +1046,24 @@ Examples:
         
         if not case_list:
             print("ERROR: No valid cases specified")
-            return 1
+            sys.exit(1)
         
         case_list = sorted(list(case_list))
         
         # Create reverse mapping for display (case number -> name)
         reverse_case_map = {v: k for k, v in case_map.items()}
+    
+    return args, backend, backend_name, case_list, reverse_case_map
+
+
+# =============================================================================
+# MAIN
+# =============================================================================
+
+def main():
+    """Main entry point for the test suite"""
+    # Parse and validate arguments
+    args, backend, backend_name, case_list, reverse_case_map = test_suite_parser_and_validator()
     
     # Print header
     print("\n" + "="*70)
@@ -1186,9 +1072,8 @@ Examples:
     print(f"Mode: {args.mode}")
     print(f"Backend: {backend_name}")
     print(f"GPU Available: {is_gpu_available()}")
-    if case_list:
+    if case_list and reverse_case_map:
         # Use reverse_case_map to get proper case name display
-        reverse_case_map = {v: k for k, v in case_map.items()}
         selected_names = [f"{i}:{reverse_case_map[i]}" for i in case_list]
         print(f"Selected Cases: {', '.join(selected_names)}")
     else:

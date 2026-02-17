@@ -47,7 +47,7 @@ def load_image(image_path, grayscale=False, device='cpu', apply_padding=True):
     
     if grayscale:
         # Decode as grayscale
-        gray_array = jpeg.decode(jpeg_data, pixel_format=0)  # 0 = TJPF_GRAY
+        gray_array = jpeg.decode(jpeg_data, pixel_format=jpeg.PixelFormat.TJPF_GRAY)
         # Handle both 2D (H, W) and 3D (H, W, 1) grayscale arrays
         if len(gray_array.shape) == 3:
             height, width, _ = gray_array.shape
