@@ -14,7 +14,7 @@ import numpy as np
 import torch
 
 try:
-    from turbojpeg import TurboJPEG
+    from turbojpeg import TurboJPEG, TJPF_GRAY, TJPF_RGB
     TURBOJPEG_AVAILABLE = True
 except ImportError:
     TURBOJPEG_AVAILABLE = False
@@ -47,7 +47,7 @@ def load_image(image_path, grayscale=False, device='cpu', apply_padding=True):
     
     if grayscale:
         # Decode as grayscale
-        gray_array = jpeg.decode(jpeg_data, pixel_format=jpeg.PixelFormat.TJPF_GRAY)
+        gray_array = jpeg.decode(jpeg_data, pixel_format=TJPF_GRAY)
         # Handle both 2D (H, W) and 3D (H, W, 1) grayscale arrays
         if len(gray_array.shape) == 3:
             height, width, _ = gray_array.shape
@@ -100,69 +100,6 @@ def load_image(image_path, grayscale=False, device='cpu', apply_padding=True):
         tensor = tensor.cuda()
     
     return tensor
-
-
-def load_images(image_paths, device='cpu', apply_padding=True):
-    """
-    Load multiple JPEG images as batch using TurboJPEG decoder.
-    
-    Args:
-        image_paths: List of paths to JPEG files
-        device: 'cpu' or 'cuda'
-        apply_padding: Apply width padding to multiple of 8
-    
-    Returns:
-        PyTorch tensor in NCHW format (B, C, H, W)
-        All images padded to same max dimensions
-    
-    Note: Matches C++ test suite pattern:
-          - Finds max dimensions across all images
-          - Pads width to (W/8)*8 + 8
-          - All images in batch have same padded dimensions
-    """
-    if not TURBOJPEG_AVAILABLE:
-        raise RuntimeError("PyTurboJPEG not installed. Run: pip install PyTurboJPEG")
-    
-    if not image_paths:
-        raise ValueError("No image paths provided")
-    
-    # Step 1: Find max dimensions (matches C++ set_max_dimensions)
-    jpeg = TurboJPEG()
-    max_height = 0
-    max_width = 0
-    
-    for path in image_paths:
-        with open(path, 'rb') as f:
-            jpeg_data = f.read()
-        bgr = jpeg.decode(jpeg_data)
-        h, w = bgr.shape[:2]
-        max_height = max(max_height, h)
-        max_width = max(max_width, w)
-    
-    # Step 2: Apply padding (matches C++ test suite)
-    if apply_padding:
-        max_width = (max_width // 8) * 8 + 8
-    
-    # Step 3: Load and pad all images to max dimensions
-    batch_size = len(image_paths)
-    first_img = load_image(image_paths[0], device='cpu', apply_padding=False)
-    channels = first_img.shape[1]
-    
-    # Create batch with max dimensions (all images same size after padding)
-    batch = torch.zeros(batch_size, channels, max_height, max_width, dtype=torch.float32)
-    
-    # Load each image and place in padded batch
-    for i, path in enumerate(image_paths):
-        img = load_image(path, device='cpu', apply_padding=False)
-        _, _, h, w = img.shape
-        # Copy image to batch (top-left corner, rest is zero-padded)
-        batch[i, :, :h, :w] = img[0, :, :h, :w]
-    
-    # Move to device
-    if device == 'cuda':
-        batch = batch.cuda()
-    
-    return batch
 
 
 def decode_jpeg_bytes(jpeg_bytes):

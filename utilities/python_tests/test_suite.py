@@ -504,7 +504,7 @@ class UnifiedTestSuite:
             if os.path.exists(ref_path):
                 ref_data = np.fromfile(ref_path, dtype=np.uint8)
                 print(f"  Loaded reference: {len(ref_data)} bytes\n")
-        print(ref_path)
+
         # Track overall success
         overall_success_count = 0
         overall_total = 0
@@ -552,8 +552,8 @@ class UnifiedTestSuite:
                     if aug_name == 'crop':
                         params['crop_width'] = actual_w // 2
                         params['crop_height'] = actual_h // 2
-                        roi_widths = [actual_w]
-                        roi_heights = [actual_h]
+                        roi_widths = [actual_w // 2]
+                        roi_heights = [actual_h // 2]
                     elif aug_name == 'resize':
                         params['width'] = actual_w // 2
                         params['height'] = actual_h // 2

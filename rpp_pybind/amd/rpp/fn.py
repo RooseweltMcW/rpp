@@ -582,6 +582,7 @@ def crop(images, x1, y1, crop_width, crop_height, roi_widths=None, roi_heights=N
     else:  # NHWC
         output = torch.empty(batch_size, crop_height, crop_width, channels, dtype=images.dtype, device=device)
     
+    output = torch.zeros_like(images).contiguous()
     handle = rppCreate(batch_size, backend=backend)
     
     # Convert scalars to lists
